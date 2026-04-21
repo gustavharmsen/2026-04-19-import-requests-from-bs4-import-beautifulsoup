@@ -13,7 +13,7 @@ from lead_engine import (
     DEFAULT_SERVICE,
     NICHE_CONFIGS,
     ScanConfig,
-    run_scan,
+    run_scan_report,
 )
 
 
@@ -52,10 +52,12 @@ def index():
         elif websites_text:
             config.websites_arg = websites_text.replace("\n", ",")
 
-        leads = run_scan(config)
+        report = run_scan_report(config)
+        leads = report.leads
         return render_template(
             "results.html",
             leads=leads,
+            attempts=report.attempts,
             config=config,
             csv_name=Path(config.output_csv).name if leads else None,
             md_name=Path(config.output_md).name if leads else None,

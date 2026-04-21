@@ -182,6 +182,26 @@ class LeadSource:
 
 
 @dataclass
+class ScanAttempt:
+    source_type: str
+    input_name: str
+    search_city: str
+    search_query: str
+    discovered_website: str | None
+    discovery_status: str
+    detail: str
+    lead_score: int | None = None
+    lead_tier: str | None = None
+    kept_as_lead: bool = False
+
+
+@dataclass
+class ScanReport:
+    leads: list[BusinessLead]
+    attempts: list[ScanAttempt]
+
+
+@dataclass
 class ScanConfig:
     city: str = DEFAULT_CITY
     query: str = DEFAULT_QUERY
@@ -992,24 +1012,28 @@ def collect_sources(config: ScanConfig, session: requests.Session) -> list[LeadS
     return [LeadSource(website=url, source_type="search") for url in found]
 
 
-def run_scan(config: ScanConfig) -> list[BusinessLead]:
+def run_scan_report(config: ScanConfig) -> ScanReport:
     session = build_session()
     try:
         sources = collect_sources(config, session)
     except (FileNotFoundError, requests.RequestException) as exc:
         print(str(exc))
-        return []
+        return ScanReport(leads=[], attempts=[])
 
     if not sources:
         print("Ingen virksomheder blev fundet. Proev --source-csv, --websites eller --input-websites.")
-        return []
+        return ScanReport(leads=[], attempts=[])
 
     leads: list[BusinessLead] = []
+    attempts: list[ScanAttempt] = []
     scanned = 0
     for source in sources:
         if scanned >= config.max_businesses:
             break
 
+        input_name = get_csv_value(source.row, "name") or source.website or "ukendt"
+        search_city = get_csv_value(source.row, "city") or config.city
+        search_query = get_csv_value(source.row, "query") or config.query
         resolved_website = discover_website_for_source(
             session,
             source,
@@ -1018,6 +1042,17 @@ def run_scan(config: ScanConfig) -> list[BusinessLead]:
         )
         if not resolved_website:
             print(f"\nSpringer over kilde uden website: {get_csv_value(source.row, 'name') or source.row or 'ukendt'}")
+            attempts.append(
+                ScanAttempt(
+                    source_type=source.source_type,
+                    input_name=input_name,
+                    search_city=search_city,
+                    search_query=search_query,
+                    discovered_website=None,
+                    discovery_status="ikke-fundet",
+                    detail="Kunne ikke finde et brugbart website for kandidaten",
+                )
+            )
             continue
 
         source.website = resolved_website
@@ -1035,10 +1070,36 @@ def run_scan(config: ScanConfig) -> list[BusinessLead]:
             )
         except requests.RequestException as exc:
             print(f"  Springer over side pa grund af fejl: {exc}")
+            attempts.append(
+                ScanAttempt(
+                    source_type=source.source_type,
+                    input_name=input_name,
+                    search_city=search_city,
+                    search_query=search_query,
+                    discovered_website=resolved_website,
+                    discovery_status="fundet-men-fejl",
+                    detail=str(exc),
+                )
+            )
             continue
 
+        kept = lead.lead_score >= config.min_score
         if lead.lead_score >= config.min_score:
             leads.append(lead)
+        attempts.append(
+            ScanAttempt(
+                source_type=source.source_type,
+                input_name=input_name,
+                search_city=search_city,
+                search_query=search_query,
+                discovered_website=resolved_website,
+                discovery_status="fundet",
+                detail="Scannet succesfuldt",
+                lead_score=lead.lead_score,
+                lead_tier=lead.lead_tier,
+                kept_as_lead=kept,
+            )
+        )
         for analysis in analyses:
             print(
                 f"  Billede: {analysis.url} | "
@@ -1050,7 +1111,11 @@ def run_scan(config: ScanConfig) -> list[BusinessLead]:
     leads = sorted(leads, key=lambda item: item.lead_score, reverse=True)
     print_summary(leads)
     persist_outputs(leads, config)
-    return leads
+    return ScanReport(leads=leads, attempts=attempts)
+
+
+def run_scan(config: ScanConfig) -> list[BusinessLead]:
+    return run_scan_report(config).leads
 
 
 def persist_outputs(leads: list[BusinessLead], config: ScanConfig) -> None:

@@ -172,6 +172,33 @@
         gap: 8px;
         color: var(--muted);
       }
+      .notes {
+        margin-top: 12px;
+        display: grid;
+        gap: 8px;
+      }
+      .notes textarea {
+        min-height: 110px;
+        resize: vertical;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        padding: 12px 14px;
+        font: inherit;
+        background: #fff;
+      }
+      .audit-table td, .audit-table th {
+        font-size: 0.92rem;
+      }
+      .status-pill {
+        display: inline-flex;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 0.82rem;
+        background: #efe4d2;
+      }
+      .status-found { background: #dff3e7; }
+      .status-missing { background: #f7ddd5; }
+      .status-error { background: #f6e7c9; }
       .empty {
         padding: 18px;
         border-radius: 18px;
@@ -296,6 +323,10 @@
                 <div><strong>Maps:</strong> rating {{ lead.maps_rating if lead.maps_rating is not none else '-' }}, reviews {{ lead.maps_review_count if lead.maps_review_count is not none else '-' }}, billeder {{ lead.maps_image_count if lead.maps_image_count is not none else '-' }}</div>
               </div>
               <pre>{{ lead.pitch_body }}</pre>
+              <div class="notes">
+                <strong>Egne noter</strong>
+                <textarea class="lead-note" data-index="{{ loop.index0 }}" placeholder="Skriv hvorfor leadet er interessant, hvad der skal folges op pa, eller hvilken vinkel du vil bruge..."></textarea>
+              </div>
             </article>
             {% endfor %}
           </div>
@@ -350,6 +381,54 @@
           </table>
         </div>
       </section>
+
+      <section class="panel" style="margin-top: 18px;">
+        <h2>Kandidatvisning og discovery-status</h2>
+        <div class="table-wrap">
+          <table class="audit-table">
+            <thead>
+              <tr>
+                <th>Kandidat</th>
+                <th>Kilde</th>
+                <th>Status</th>
+                <th>Website</th>
+                <th>Score</th>
+                <th>Detalje</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for attempt in attempts %}
+              <tr>
+                <td>
+                  <strong>{{ attempt.input_name }}</strong><br>
+                  <span class="meta">{{ attempt.search_query }} i {{ attempt.search_city }}</span>
+                </td>
+                <td>{{ attempt.source_type }}</td>
+                <td>
+                  {% if attempt.discovery_status == 'fundet' %}
+                  <span class="status-pill status-found">Fundet</span>
+                  {% elif attempt.discovery_status == 'ikke-fundet' %}
+                  <span class="status-pill status-missing">Ikke fundet</span>
+                  {% else %}
+                  <span class="status-pill status-error">Fejl</span>
+                  {% endif %}
+                </td>
+                <td>{{ attempt.discovered_website or '-' }}</td>
+                <td>
+                  {% if attempt.lead_score is not none %}
+                    {{ attempt.lead_score }}/100{% if attempt.lead_tier %} ({{ attempt.lead_tier }}){% endif %}
+                    {% if not attempt.kept_as_lead %}<br><span class="meta">Filtreret fra</span>{% endif %}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+                <td>{{ attempt.detail }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
       {% endif %}
     </div>
 
@@ -357,7 +436,9 @@
     <script>
       const rows = Array.from(document.querySelectorAll('.lead-row'));
       const cards = Array.from(document.querySelectorAll('.lead-card'));
-      const shortlist = new Set();
+      const storageKey = {{ ('lead-engine:' ~ config.niche ~ ':' ~ config.city ~ ':' ~ config.query)|tojson }};
+      const savedState = JSON.parse(localStorage.getItem(storageKey) || '{"shortlist":[],"notes":{}}');
+      const shortlist = new Set(savedState.shortlist || []);
 
       const scoreInput = document.getElementById('filter-score');
       const tierInput = document.getElementById('filter-tier');
@@ -366,6 +447,17 @@
       const sortInput = document.getElementById('sort-mode');
       const avgStat = document.getElementById('stat-average');
       const shortlistStat = document.getElementById('stat-shortlist');
+
+      function persistState() {
+        const notes = {};
+        document.querySelectorAll('.lead-note').forEach(note => {
+          if (note.value.trim()) notes[note.dataset.index] = note.value;
+        });
+        localStorage.setItem(storageKey, JSON.stringify({
+          shortlist: Array.from(shortlist),
+          notes
+        }));
+      }
 
       function showCard(index) {
         cards.forEach(card => card.classList.remove('active'));
@@ -433,8 +525,20 @@
             shortlist.add(index);
             button.classList.add('active');
           }
+          persistState();
           applyFilters();
         });
+      });
+
+      document.querySelectorAll('.lead-note').forEach(note => {
+        note.value = (savedState.notes && savedState.notes[note.dataset.index]) || '';
+        note.addEventListener('input', persistState);
+      });
+
+      document.querySelectorAll('.shortlist-btn').forEach(button => {
+        if (shortlist.has(button.dataset.index)) {
+          button.classList.add('active');
+        }
       });
 
       [scoreInput, tierInput, textInput, viewInput, sortInput].forEach(control => {
