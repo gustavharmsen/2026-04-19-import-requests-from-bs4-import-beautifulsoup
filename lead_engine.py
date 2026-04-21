@@ -1,6 +1,7 @@
 import argparse
 import csv
 import re
+import sqlite3
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -32,6 +33,11 @@ SOCIAL_DOMAINS = {
     "tiktok.com": "tiktok",
     "youtube.com": "youtube",
 }
+PRIORITY_STATUSES = {
+    "A": "new-high-priority",
+    "B": "review",
+    "C": "backlog",
+}
 
 
 @dataclass
@@ -58,12 +64,18 @@ class SiteProfile:
     has_menu: bool = False
     has_cookie_banner: bool = False
     text_length: int = 0
+    matched_keywords: list[str] = field(default_factory=list)
+    contact_score: int = 0
+    content_score: int = 0
 
 
 @dataclass
 class BusinessLead:
-    website: str
     business_name: str
+    website: str
+    domain: str
+    city: str
+    search_query: str
     contact_page: str | None
     primary_email: str | None
     primary_phone: str | None
@@ -73,11 +85,13 @@ class BusinessLead:
     average_image_score: float | None
     lead_score: int
     lead_tier: str
+    crm_status: str
     reasons: str
     recommendation: str
     outreach_angle: str
     technologies: str
     social_links: str
+    matched_keywords: str
     pitch_subject: str
     pitch_body: str
     next_action: str
@@ -208,27 +222,40 @@ def score_image(*, width: int, height: int, blur_score: float) -> int:
     return max(score, 0)
 
 
-def extract_site_profile(session: requests.Session, website: str) -> SiteProfile:
+def extract_site_profile(session: requests.Session, website: str, query: str, city: str) -> SiteProfile:
     soup, final_url = fetch_soup(session, website)
     page_text = soup.get_text(" ", strip=True)
+
+    contact_page = discover_contact_page(soup, final_url)
+    extra_text = ""
+    if contact_page:
+        try:
+            contact_soup, _ = fetch_soup(session, contact_page)
+            extra_text = contact_soup.get_text(" ", strip=True)
+        except requests.RequestException:
+            extra_text = ""
+
+    combined_text = f"{page_text} {extra_text}".strip()
+    text_lower = combined_text.lower()
 
     title = clean_text(soup.title.string if soup.title and soup.title.string else "")
     meta_description_tag = soup.find("meta", attrs={"name": "description"})
     meta_description = clean_text(meta_description_tag.get("content", "") if meta_description_tag else "")
 
     business_name = extract_business_name(soup, final_url, title)
-    emails = unique_list(EMAIL_RE.findall(page_text) + extract_mailto_links(soup))
-    phones = unique_list(normalize_phone(phone) for phone in PHONE_RE.findall(page_text))
+    emails = unique_list(EMAIL_RE.findall(combined_text) + extract_mailto_links(soup))
+    phones = unique_list(normalize_phone(phone) for phone in PHONE_RE.findall(combined_text))
     phones = [phone for phone in phones if phone]
-
     social_links = unique_list(extract_social_links(soup, final_url))
     technologies = detect_technologies(soup, final_url)
-    contact_page = discover_contact_page(soup, final_url)
+    matched_keywords = extract_matched_keywords(text_lower, query=query, city=city)
 
-    text_lower = page_text.lower()
     has_booking = any(word in text_lower for word in ("book", "booking", "reserv", "bestil", "order online"))
     has_menu = any(word in text_lower for word in ("menu", "menukort", "wine list", "drinks"))
     has_cookie_banner = any(word in text_lower for word in ("cookie", "cookies", "gdpr", "privacy"))
+
+    contact_score = int(bool(emails)) + int(bool(phones)) + int(bool(contact_page))
+    content_score = int(bool(meta_description)) + int(len(combined_text) >= 500) + int(bool(matched_keywords))
 
     return SiteProfile(
         website=final_url,
@@ -243,7 +270,10 @@ def extract_site_profile(session: requests.Session, website: str) -> SiteProfile
         has_booking=has_booking,
         has_menu=has_menu,
         has_cookie_banner=has_cookie_banner,
-        text_length=len(page_text),
+        text_length=len(combined_text),
+        matched_keywords=matched_keywords,
+        contact_score=contact_score,
+        content_score=content_score,
     )
 
 
@@ -322,11 +352,19 @@ def discover_contact_page(soup: BeautifulSoup, base_url: str) -> str | None:
     return None
 
 
+def extract_matched_keywords(text_lower: str, query: str, city: str) -> list[str]:
+    query_keywords = [clean_text(part).lower() for part in re.split(r"\W+", query) if part.strip()]
+    candidate_keywords = query_keywords + [city.lower(), "kontakt", "bestil", "booking", "menu"]
+    return [keyword for keyword in candidate_keywords if keyword and keyword in text_lower]
+
+
 def score_business(
     profile: SiteProfile,
     image_count: int,
     analyses: Iterable[ImageAnalysis],
     service_offer: str,
+    city: str,
+    query: str,
 ) -> BusinessLead:
     analysis_list = list(analyses)
     reasons: list[str] = []
@@ -359,21 +397,14 @@ def score_business(
             score -= 10
             reasons.append("fornuftig billedkvalitet")
 
-    if not profile.emails:
+    if profile.contact_score == 0:
+        score += 16
+        reasons.append("svag kontaktstruktur")
+    elif profile.contact_score == 1:
         score += 8
-        reasons.append("ingen tydelig email")
+        reasons.append("begranset kontaktinfo")
     else:
         score -= 4
-
-    if not profile.phones:
-        score += 6
-        reasons.append("ingen tydelig telefon")
-    else:
-        score -= 2
-
-    if not profile.contact_page:
-        score += 8
-        reasons.append("ingen tydelig kontakt-side")
 
     if not profile.meta_description:
         score += 8
@@ -401,6 +432,13 @@ def score_business(
         score += 4
         reasons.append("ingen tydelig cookie eller privacy-info")
 
+    if profile.matched_keywords:
+        score += 6
+        reasons.append("starkt match med sokriterier")
+    else:
+        score -= 5
+        reasons.append("svagt match med sokriterier")
+
     lead_score = max(0, min(100, round(score)))
     lead_tier = classify_lead_tier(lead_score)
     recommendation = build_recommendation(lead_tier)
@@ -410,8 +448,11 @@ def score_business(
     next_action = build_next_action(lead_tier, profile)
 
     return BusinessLead(
-        website=profile.website,
         business_name=profile.business_name,
+        website=profile.website,
+        domain=urlparse(profile.website).netloc.replace("www.", ""),
+        city=city,
+        search_query=query,
         contact_page=profile.contact_page,
         primary_email=profile.emails[0] if profile.emails else None,
         primary_phone=profile.phones[0] if profile.phones else None,
@@ -421,11 +462,13 @@ def score_business(
         average_image_score=average_image_score,
         lead_score=lead_score,
         lead_tier=lead_tier,
-        reasons=", ".join(reasons[:6]),
+        crm_status=PRIORITY_STATUSES[lead_tier],
+        reasons=", ".join(reasons[:7]),
         recommendation=recommendation,
         outreach_angle=outreach_angle,
         technologies=", ".join(profile.technologies),
         social_links=", ".join(profile.social_links[:3]),
+        matched_keywords=", ".join(profile.matched_keywords),
         pitch_subject=pitch_subject,
         pitch_body=pitch_body,
         next_action=next_action,
@@ -461,7 +504,7 @@ def build_outreach_angle(profile: SiteProfile, average_image_score: float | None
         angles.append("indfoere tydelig booking eller bestillingsflow")
 
     if not angles:
-        return "Vis manuel gennemgang og find en mere specifik vinkel"
+        return "vis manuel gennemgang og find en mere specifik vinkel"
 
     return "; ".join(angles[:3])
 
@@ -498,8 +541,10 @@ def analyze_business(
     website: str,
     max_images: int,
     service_offer: str,
+    city: str,
+    query: str,
 ) -> tuple[BusinessLead, list[ImageAnalysis]]:
-    profile = extract_site_profile(session, website)
+    profile = extract_site_profile(session, website, query=query, city=city)
     images = extract_images(session, profile.website)
     analyses: list[ImageAnalysis] = []
 
@@ -508,7 +553,14 @@ def analyze_business(
         if analysis:
             analyses.append(analysis)
 
-    lead = score_business(profile, len(images), analyses, service_offer=service_offer)
+    lead = score_business(
+        profile,
+        len(images),
+        analyses,
+        service_offer=service_offer,
+        city=city,
+        query=query,
+    )
     return lead, analyses
 
 
@@ -533,17 +585,20 @@ def save_results_to_markdown(leads: list[BusinessLead], filepath: str, city: str
         "",
     ]
 
-    for index, lead in enumerate(sorted(leads, key=lambda item: item.lead_score, reverse=True), start=1):
+    for index, lead in enumerate(leads, start=1):
         lines.extend(
             [
                 f"## {index}. {lead.business_name}",
                 "",
                 f"- Website: {lead.website}",
+                f"- Domain: {lead.domain}",
                 f"- Lead tier: {lead.lead_tier}",
                 f"- Lead score: {lead.lead_score}/100",
+                f"- CRM status: {lead.crm_status}",
                 f"- Email: {lead.primary_email or '-'}",
                 f"- Phone: {lead.primary_phone or '-'}",
                 f"- Contact page: {lead.contact_page or '-'}",
+                f"- Matched keywords: {lead.matched_keywords or '-'}",
                 f"- Outreach angle: {lead.outreach_angle}",
                 f"- Reasons: {lead.reasons}",
                 f"- Recommendation: {lead.recommendation}",
@@ -563,23 +618,108 @@ def save_results_to_markdown(leads: list[BusinessLead], filepath: str, city: str
     Path(filepath).write_text("\n".join(lines), encoding="utf-8")
 
 
+def save_results_to_sqlite(leads: list[BusinessLead], filepath: str) -> None:
+    conn = sqlite3.connect(filepath)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS leads (
+                domain TEXT PRIMARY KEY,
+                business_name TEXT NOT NULL,
+                website TEXT NOT NULL,
+                city TEXT,
+                search_query TEXT,
+                contact_page TEXT,
+                primary_email TEXT,
+                primary_phone TEXT,
+                image_count INTEGER,
+                analyzed_count INTEGER,
+                best_image_score INTEGER,
+                average_image_score REAL,
+                lead_score INTEGER,
+                lead_tier TEXT,
+                crm_status TEXT,
+                reasons TEXT,
+                recommendation TEXT,
+                outreach_angle TEXT,
+                technologies TEXT,
+                social_links TEXT,
+                matched_keywords TEXT,
+                pitch_subject TEXT,
+                pitch_body TEXT,
+                next_action TEXT
+            )
+            """
+        )
+
+        for lead in leads:
+            row = asdict(lead)
+            conn.execute(
+                """
+                INSERT INTO leads (
+                    business_name, website, domain, city, search_query, contact_page,
+                    primary_email, primary_phone, image_count, analyzed_count,
+                    best_image_score, average_image_score, lead_score, lead_tier,
+                    crm_status, reasons, recommendation, outreach_angle,
+                    technologies, social_links, matched_keywords,
+                    pitch_subject, pitch_body, next_action
+                ) VALUES (
+                    :business_name, :website, :domain, :city, :search_query, :contact_page,
+                    :primary_email, :primary_phone, :image_count, :analyzed_count,
+                    :best_image_score, :average_image_score, :lead_score, :lead_tier,
+                    :crm_status, :reasons, :recommendation, :outreach_angle,
+                    :technologies, :social_links, :matched_keywords,
+                    :pitch_subject, :pitch_body, :next_action
+                )
+                ON CONFLICT(domain) DO UPDATE SET
+                    business_name=excluded.business_name,
+                    website=excluded.website,
+                    city=excluded.city,
+                    search_query=excluded.search_query,
+                    contact_page=excluded.contact_page,
+                    primary_email=excluded.primary_email,
+                    primary_phone=excluded.primary_phone,
+                    image_count=excluded.image_count,
+                    analyzed_count=excluded.analyzed_count,
+                    best_image_score=excluded.best_image_score,
+                    average_image_score=excluded.average_image_score,
+                    lead_score=excluded.lead_score,
+                    lead_tier=excluded.lead_tier,
+                    crm_status=excluded.crm_status,
+                    reasons=excluded.reasons,
+                    recommendation=excluded.recommendation,
+                    outreach_angle=excluded.outreach_angle,
+                    technologies=excluded.technologies,
+                    social_links=excluded.social_links,
+                    matched_keywords=excluded.matched_keywords,
+                    pitch_subject=excluded.pitch_subject,
+                    pitch_body=excluded.pitch_body,
+                    next_action=excluded.next_action
+                """,
+                row,
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def print_summary(leads: list[BusinessLead]) -> None:
     if not leads:
         print("Ingen virksomheder blev fundet.")
         return
 
     print("\n=== PROFESSIONEL LEADLISTE ===")
-    for index, lead in enumerate(sorted(leads, key=lambda item: item.lead_score, reverse=True), start=1):
+    for index, lead in enumerate(leads, start=1):
         print(f"\n{index}. {lead.business_name} ({lead.website})")
-        print(f"   Tier: {lead.lead_tier} | Lead score: {lead.lead_score}/100")
+        print(f"   Tier: {lead.lead_tier} | Lead score: {lead.lead_score}/100 | CRM: {lead.crm_status}")
         print(f"   Email: {lead.primary_email or '-'} | Telefon: {lead.primary_phone or '-'}")
         print(f"   Kontakt-side: {lead.contact_page or '-'}")
+        print(f"   Match: {lead.matched_keywords or '-'}")
         print(f"   Billeder: {lead.image_count} fundet, {lead.analyzed_count} analyseret")
-        print(f"   Gennemsnitlig billede-score: {lead.average_image_score}")
         print(f"   Signal: {lead.reasons}")
         print(f"   Naeste pitch: {lead.outreach_angle}")
         print(f"   Naeste handling: {lead.next_action}")
-        print(f"   Anbefaling: {lead.recommendation}")
 
 
 def run_ai_lead_engine(
@@ -589,7 +729,9 @@ def run_ai_lead_engine(
     max_images: int,
     output_csv: str | None,
     output_md: str | None,
+    output_db: str | None,
     service_offer: str,
+    min_score: int,
 ) -> None:
     session = build_session()
 
@@ -612,12 +754,16 @@ def run_ai_lead_engine(
                 website,
                 max_images=max_images,
                 service_offer=service_offer,
+                city=city,
+                query=query,
             )
         except requests.RequestException as exc:
             print(f"  Springer over side pa grund af fejl: {exc}")
             continue
 
-        leads.append(business_lead)
+        if business_lead.lead_score >= min_score:
+            leads.append(business_lead)
+
         for analysis in analyses:
             print(
                 f"  Billede: {analysis.url} | "
@@ -636,6 +782,10 @@ def run_ai_lead_engine(
     if output_md and leads:
         save_results_to_markdown(leads, output_md, city=city, query=query, service_offer=service_offer)
         print(f"Markdown rapport gemt i: {output_md}")
+
+    if output_db and leads:
+        save_results_to_sqlite(leads, output_db)
+        print(f"SQLite database gemt i: {output_db}")
 
 
 def clean_text(value: str) -> str:
@@ -664,8 +814,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-businesses", type=int, default=MAX_BUSINESSES, help="Maks antal websites at scanne")
     parser.add_argument("--max-images", type=int, default=MAX_IMAGES_PER_SITE, help="Maks antal billeder per website")
     parser.add_argument("--service-offer", default=DEFAULT_SERVICE, help="Din ydelse, som bruges i outreach-udkast")
+    parser.add_argument("--min-score", type=int, default=0, help="Filtrer leads under denne score")
     parser.add_argument("--output-csv", default="lead_results.csv", help="CSV-fil til resultater")
     parser.add_argument("--output-md", default="lead_report.md", help="Markdown-rapport til manuel opfolgning")
+    parser.add_argument("--output-db", default="lead_engine.db", help="SQLite-database til lokal leadhistorik")
     return parser.parse_args()
 
 
@@ -678,5 +830,7 @@ if __name__ == "__main__":
         max_images=args.max_images,
         output_csv=args.output_csv,
         output_md=args.output_md,
+        output_db=args.output_db,
         service_offer=args.service_offer,
+        min_score=args.min_score,
     )

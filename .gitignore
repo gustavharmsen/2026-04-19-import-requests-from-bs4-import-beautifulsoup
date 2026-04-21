@@ -3,3 +3,4 @@ __pycache__/
 .DS_Store
 lead_results.csv
 lead_report.md
+lead_engine.db
