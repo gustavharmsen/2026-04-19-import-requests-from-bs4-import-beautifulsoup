@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import argparse
 import csv
 import re
 import sqlite3
+import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -11,6 +14,7 @@ import cv2
 import numpy as np
 import requests
 from bs4 import BeautifulSoup
+from urllib3.exceptions import NotOpenSSLWarning
 
 
 USER_AGENT = (
@@ -38,6 +42,8 @@ PRIORITY_STATUSES = {
     "B": "review",
     "C": "backlog",
 }
+
+warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
 
 
 @dataclass
@@ -95,6 +101,11 @@ class BusinessLead:
     pitch_subject: str
     pitch_body: str
     next_action: str
+    maps_name: str | None = None
+    maps_rating: float | None = None
+    maps_review_count: int | None = None
+    maps_image_count: int | None = None
+    maps_place_url: str | None = None
 
 
 def build_session() -> requests.Session:
@@ -110,6 +121,81 @@ def fetch_soup(session: requests.Session, url: str) -> tuple[BeautifulSoup, str]
 
 
 def find_businesses(session: requests.Session, city: str, query: str) -> list[str]:
+    google_results = search_google(session, city=city, query=query)
+    if google_results:
+        return google_results
+
+    bing_results = search_bing(session, city=city, query=query)
+    if bing_results:
+        return bing_results
+
+    return []
+
+
+def load_websites_from_file(filepath: str) -> list[str]:
+    path = Path(filepath)
+    if not path.exists():
+        raise FileNotFoundError(f"Filen findes ikke: {filepath}")
+
+    websites: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        website = clean_text(line)
+        if not website or website.startswith("#"):
+            continue
+        websites.append(normalize_url(website))
+
+    return list(dict.fromkeys(websites))
+
+
+def parse_websites_arg(raw_value: str) -> list[str]:
+    websites = [normalize_url(clean_text(part)) for part in raw_value.split(",") if clean_text(part)]
+    return list(dict.fromkeys(websites))
+
+
+def load_maps_csv(filepath: str) -> list[dict[str, str]]:
+    path = Path(filepath)
+    if not path.exists():
+        raise FileNotFoundError(f"Filen findes ikke: {filepath}")
+
+    with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        rows = [{key.strip().lower(): (value or "").strip() for key, value in row.items()} for row in reader]
+
+    return rows
+
+
+def parse_optional_int(value: str) -> int | None:
+    if not value:
+        return None
+    digits = re.sub(r"[^\d]", "", value)
+    return int(digits) if digits else None
+
+
+def parse_optional_float(value: str) -> float | None:
+    if not value:
+        return None
+    cleaned = value.replace(",", ".")
+    match = re.search(r"\d+(?:\.\d+)?", cleaned)
+    return float(match.group()) if match else None
+
+
+def prepare_maps_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    prepared: list[dict[str, str]] = []
+    for row in rows:
+        website = row.get("website") or row.get("domain") or row.get("url")
+        if not website:
+            continue
+
+        if not website.startswith("http"):
+            website = f"https://{website}"
+
+        row["website"] = normalize_url(website)
+        prepared.append(row)
+
+    return prepared
+
+
+def search_google(session: requests.Session, city: str, query: str) -> list[str]:
     search_term = quote_plus(f"{query} {city} website")
     search_url = f"https://www.google.com/search?q={search_term}"
     soup, _ = fetch_soup(session, search_url)
@@ -125,6 +211,25 @@ def find_businesses(session: requests.Session, city: str, query: str) -> list[st
             continue
 
         websites.append(normalize_url(parsed_href))
+
+    return list(dict.fromkeys(websites))
+
+
+def search_bing(session: requests.Session, city: str, query: str) -> list[str]:
+    search_term = quote_plus(f"{query} {city} website")
+    search_url = f"https://www.bing.com/search?q={search_term}"
+    soup, _ = fetch_soup(session, search_url)
+
+    websites: list[str] = []
+    for link in soup.select("li.b_algo h2 a, a"):
+        href = link.get("href")
+        if not href or not href.startswith("http"):
+            continue
+
+        if is_blocked_domain(href):
+            continue
+
+        websites.append(normalize_url(href))
 
     return list(dict.fromkeys(websites))
 
@@ -365,6 +470,7 @@ def score_business(
     service_offer: str,
     city: str,
     query: str,
+    maps_row: dict[str, str] | None = None,
 ) -> BusinessLead:
     analysis_list = list(analyses)
     reasons: list[str] = []
@@ -439,6 +545,40 @@ def score_business(
         score -= 5
         reasons.append("svagt match med sokriterier")
 
+    maps_image_count = None
+    maps_rating = None
+    maps_review_count = None
+    maps_name = None
+    maps_place_url = None
+    if maps_row:
+        maps_name = maps_row.get("name") or maps_row.get("business_name")
+        maps_place_url = maps_row.get("maps_url") or maps_row.get("place_url") or maps_row.get("maps_link")
+        maps_image_count = parse_optional_int(
+            maps_row.get("image_count")
+            or maps_row.get("photos")
+            or maps_row.get("photo_count")
+            or maps_row.get("maps_image_count")
+            or ""
+        )
+        maps_rating = parse_optional_float(maps_row.get("rating") or "")
+        maps_review_count = parse_optional_int(maps_row.get("review_count") or maps_row.get("reviews") or "")
+
+        if maps_image_count is not None:
+            if maps_image_count == 0:
+                score += 22
+                reasons.append("ingen billeder pa maps")
+            elif maps_image_count <= 3:
+                score += 14
+                reasons.append("fa billeder pa maps")
+            elif maps_image_count >= 15:
+                score -= 6
+                reasons.append("mange billeder pa maps")
+
+        if maps_rating is not None and maps_review_count is not None:
+            if maps_rating >= 4.2 and maps_review_count >= 20 and (maps_image_count is None or maps_image_count <= 3):
+                score += 10
+                reasons.append("starkt maps-profil men svag billeddaekning")
+
     lead_score = max(0, min(100, round(score)))
     lead_tier = classify_lead_tier(lead_score)
     recommendation = build_recommendation(lead_tier)
@@ -472,6 +612,11 @@ def score_business(
         pitch_subject=pitch_subject,
         pitch_body=pitch_body,
         next_action=next_action,
+        maps_name=maps_name,
+        maps_rating=maps_rating,
+        maps_review_count=maps_review_count,
+        maps_image_count=maps_image_count,
+        maps_place_url=maps_place_url,
     )
 
 
@@ -543,6 +688,7 @@ def analyze_business(
     service_offer: str,
     city: str,
     query: str,
+    maps_row: dict[str, str] | None = None,
 ) -> tuple[BusinessLead, list[ImageAnalysis]]:
     profile = extract_site_profile(session, website, query=query, city=city)
     images = extract_images(session, profile.website)
@@ -560,6 +706,7 @@ def analyze_business(
         service_offer=service_offer,
         city=city,
         query=query,
+        maps_row=maps_row,
     )
     return lead, analyses
 
@@ -597,6 +744,11 @@ def save_results_to_markdown(leads: list[BusinessLead], filepath: str, city: str
                 f"- CRM status: {lead.crm_status}",
                 f"- Email: {lead.primary_email or '-'}",
                 f"- Phone: {lead.primary_phone or '-'}",
+                f"- Maps name: {lead.maps_name or '-'}",
+                f"- Maps rating: {lead.maps_rating if lead.maps_rating is not None else '-'}",
+                f"- Maps reviews: {lead.maps_review_count if lead.maps_review_count is not None else '-'}",
+                f"- Maps images: {lead.maps_image_count if lead.maps_image_count is not None else '-'}",
+                f"- Maps link: {lead.maps_place_url or '-'}",
                 f"- Contact page: {lead.contact_page or '-'}",
                 f"- Matched keywords: {lead.matched_keywords or '-'}",
                 f"- Outreach angle: {lead.outreach_angle}",
@@ -732,17 +884,38 @@ def run_ai_lead_engine(
     output_db: str | None,
     service_offer: str,
     min_score: int,
+    input_websites: str | None,
+    websites_arg: str | None,
+    maps_csv: str | None,
 ) -> None:
     session = build_session()
 
-    try:
-        businesses = find_businesses(session, city=city, query=query)
-    except requests.RequestException as exc:
-        print(f"Kunne ikke hente virksomheder: {exc}")
-        return
+    maps_rows_by_website: dict[str, dict[str, str]] = {}
+    if maps_csv:
+        try:
+            maps_rows = prepare_maps_rows(load_maps_csv(maps_csv))
+        except FileNotFoundError as exc:
+            print(str(exc))
+            return
+        businesses = [row["website"] for row in maps_rows]
+        maps_rows_by_website = {row["website"]: row for row in maps_rows}
+    elif websites_arg:
+        businesses = parse_websites_arg(websites_arg)
+    elif input_websites:
+        try:
+            businesses = load_websites_from_file(input_websites)
+        except FileNotFoundError as exc:
+            print(str(exc))
+            return
+    else:
+        try:
+            businesses = find_businesses(session, city=city, query=query)
+        except requests.RequestException as exc:
+            print(f"Kunne ikke hente virksomheder: {exc}")
+            return
 
     if not businesses:
-        print("Ingen virksomheder blev fundet i sogningen.")
+        print("Ingen virksomheder blev fundet. Proev --websites eller --input-websites for at scanne en manuel liste.")
         return
 
     leads: list[BusinessLead] = []
@@ -756,6 +929,7 @@ def run_ai_lead_engine(
                 service_offer=service_offer,
                 city=city,
                 query=query,
+                maps_row=maps_rows_by_website.get(website),
             )
         except requests.RequestException as exc:
             print(f"  Springer over side pa grund af fejl: {exc}")
@@ -815,6 +989,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-images", type=int, default=MAX_IMAGES_PER_SITE, help="Maks antal billeder per website")
     parser.add_argument("--service-offer", default=DEFAULT_SERVICE, help="Din ydelse, som bruges i outreach-udkast")
     parser.add_argument("--min-score", type=int, default=0, help="Filtrer leads under denne score")
+    parser.add_argument("--websites", help="Kommasepareret liste af websites der skal scannes direkte")
+    parser.add_argument("--input-websites", help="Tekstfil med et website per linje")
+    parser.add_argument("--maps-csv", help="CSV med virksomheder fra Maps eller anden kilde. Forventede felter: website plus evt. name, rating, review_count, image_count, maps_url")
     parser.add_argument("--output-csv", default="lead_results.csv", help="CSV-fil til resultater")
     parser.add_argument("--output-md", default="lead_report.md", help="Markdown-rapport til manuel opfolgning")
     parser.add_argument("--output-db", default="lead_engine.db", help="SQLite-database til lokal leadhistorik")
@@ -833,4 +1010,7 @@ if __name__ == "__main__":
         output_db=args.output_db,
         service_offer=args.service_offer,
         min_score=args.min_score,
+        input_websites=args.input_websites,
+        websites_arg=args.websites,
+        maps_csv=args.maps_csv,
     )

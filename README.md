@@ -42,6 +42,40 @@ python lead_engine.py \
   --output-db lead_engine.db
 ```
 
+Hvis sogemaskinerne ikke giver resultater, kan du scanne websites direkte:
+
+```bash
+python lead_engine.py \
+  --websites "https://example.com,https://example.org" \
+  --service-offer "webdesign, billeder og lokal SEO" \
+  --min-score 55
+```
+
+Eller via fil med et website per linje:
+
+```bash
+python lead_engine.py --input-websites websites.txt
+```
+
+Du kan ogsa indlaese en CSV fra fx Google Maps-arbejde eller andre lister:
+
+```bash
+python lead_engine.py \
+  --maps-csv maps_leads.csv \
+  --service-offer "webdesign, billeder og lokal SEO" \
+  --min-score 55
+```
+
+Eksempel pa CSV-kolonner:
+
+```csv
+name,website,rating,review_count,image_count,maps_url
+Restaurant A,https://example-a.dk,4.5,187,1,https://maps.google.com/...
+Restaurant B,https://example-b.dk,4.2,96,0,https://maps.google.com/...
+```
+
+Hvis en virksomhed har fa eller ingen billeder pa Maps, vil det nu trakke lead-scoren op, isaer hvis rating og anmeldelser ellers ser staerke ud.
+
 ## Output
 
 Scriptet genererer som standard:
