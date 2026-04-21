@@ -5,19 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Lead Resultater</title>
     <style>
+      :root {
+        --bg: #f5f1e8;
+        --panel: #fffaf1;
+        --ink: #18211f;
+        --muted: #56625d;
+        --line: #ddd2c2;
+        --accent: #0c7c59;
+        --accent-2: #d68c45;
+        --soft: #efe4d2;
+      }
       body {
         margin: 0;
         font-family: Georgia, "Times New Roman", serif;
-        background: #f5f1e8;
-        color: #18211f;
+        background: linear-gradient(180deg, #efe6d8 0%, var(--bg) 45%, #f8f6ef 100%);
+        color: var(--ink);
       }
       .wrap {
-        max-width: 1100px;
+        max-width: 1200px;
         margin: 0 auto;
         padding: 28px 20px 50px;
       }
       a {
-        color: #0c7c59;
+        color: var(--accent);
       }
       .actions {
         display: flex;
@@ -25,23 +35,156 @@
         flex-wrap: wrap;
         margin-bottom: 24px;
       }
-      .card {
-        background: #fffaf1;
-        border: 1px solid #ddd2c2;
-        border-radius: 22px;
-        padding: 18px 20px;
-        margin-bottom: 16px;
-        box-shadow: 0 10px 30px rgba(36, 31, 20, 0.07);
+      .hero {
+        display: grid;
+        gap: 12px;
+        margin-bottom: 22px;
+      }
+      .hero h1 {
+        margin: 0;
+        font-size: clamp(2rem, 3.5vw, 3.6rem);
+        line-height: 0.95;
       }
       .meta {
-        color: #56625d;
+        color: var(--muted);
       }
-      pre {
+      .grid {
+        display: grid;
+        grid-template-columns: 0.95fr 1.4fr;
+        gap: 18px;
+        align-items: start;
+      }
+      .panel, .lead-card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 20px;
+        box-shadow: 0 12px 30px rgba(36, 31, 20, 0.07);
+      }
+      .panel h2, .lead-card h3 {
+        margin-top: 0;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+      .stat {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 16px;
+      }
+      .stat strong {
+        display: block;
+        font-size: 1.4rem;
+      }
+      .controls {
+        display: grid;
+        gap: 12px;
+      }
+      .control-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 0.95rem;
+      }
+      input, select {
+        font: inherit;
+        padding: 11px 13px;
+        border-radius: 14px;
+        border: 1px solid #cdbfa9;
+        background: #fff;
+      }
+      .table-wrap {
+        overflow-x: auto;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: #fff;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 760px;
+      }
+      th, td {
+        padding: 12px 14px;
+        text-align: left;
+        border-bottom: 1px solid #eadfce;
+        vertical-align: top;
+      }
+      th {
+        background: #f7f1e7;
+        font-size: 0.92rem;
+      }
+      tr:hover td {
+        background: #fffaf3;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--soft);
+        font-size: 0.85rem;
+      }
+      .tier-A { background: #dff3e7; }
+      .tier-B { background: #f6e7c9; }
+      .tier-C { background: #eee4da; }
+      .shortlist-btn, .details-btn {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 999px;
+        padding: 8px 12px;
+        cursor: pointer;
+        font: inherit;
+      }
+      .shortlist-btn.active {
+        background: #18211f;
+        color: #fff;
+        border-color: #18211f;
+      }
+      .lead-list {
+        display: grid;
+        gap: 14px;
+      }
+      .lead-card {
+        display: none;
+      }
+      .lead-card.active {
+        display: block;
+      }
+      .lead-card pre {
         white-space: pre-wrap;
         background: #fff;
         padding: 14px;
         border-radius: 14px;
-        border: 1px solid #ddd2c2;
+        border: 1px solid var(--line);
+      }
+      .lead-card .mini {
+        display: grid;
+        gap: 8px;
+        color: var(--muted);
+      }
+      .empty {
+        padding: 18px;
+        border-radius: 18px;
+        background: #fff;
+        border: 1px dashed #cdbfa9;
+      }
+      .hidden {
+        display: none !important;
+      }
+      @media (max-width: 980px) {
+        .grid, .control-row, .stats {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
   </head>
@@ -53,11 +196,13 @@
         {% if md_name %}<a href="{{ url_for('download', filename=md_name) }}">Download rapport</a>{% endif %}
       </div>
 
-      <h1>{{ leads|length }} leads fundet</h1>
-      <p class="meta">Niche: {{ config.niche }}. By: {{ config.city }}. Søgning: {{ config.query }}.</p>
+      <section class="hero">
+        <h1>{{ leads|length }} leads fundet</h1>
+        <p class="meta">Niche: {{ config.niche }}. By: {{ config.city }}. Søgning: {{ config.query }}. Brug tabellen til at filtrere, sortere og shortlist de bedste leads.</p>
+      </section>
 
       {% if not leads %}
-      <section class="card">
+      <section class="panel">
         <h2>Ingen leads blev vist</h2>
         <p>Det betyder typisk en af tre ting:</p>
         <p>1. Discovery fandt ingen brugbare websites.</p>
@@ -66,19 +211,239 @@
         <p><strong>Prøv dette først:</strong> ga tilbage og saet <em>Min. score</em> til <code>0</code> eller <code>25</code>, og sog igen.</p>
         <p><strong>Gode tests:</strong> `restaurant`, `frisor`, `hotel`, `bilforhandler` sammen med en by.</p>
       </section>
-      {% endif %}
-
-      {% for lead in leads %}
-      <section class="card">
-        <h2>{{ loop.index }}. {{ lead.business_name }}</h2>
-        <p class="meta">{{ lead.website }} | Tier {{ lead.lead_tier }} | Score {{ lead.lead_score }}/100 | CRM {{ lead.crm_status }}</p>
-        <p><strong>Outreach-vinkel:</strong> {{ lead.outreach_angle }}</p>
-        <p><strong>Signaler:</strong> {{ lead.reasons }}</p>
-        <p><strong>Socials:</strong> {{ lead.social_links or '-' }}</p>
-        <p><strong>Maps:</strong> rating {{ lead.maps_rating if lead.maps_rating is not none else '-' }}, reviews {{ lead.maps_review_count if lead.maps_review_count is not none else '-' }}, billeder {{ lead.maps_image_count if lead.maps_image_count is not none else '-' }}</p>
-        <pre>{{ lead.pitch_body }}</pre>
+      {% else %}
+      <section class="stats">
+        <div class="stat">
+          <span class="meta">Alle leads</span>
+          <strong id="stat-all">{{ leads|length }}</strong>
+        </div>
+        <div class="stat">
+          <span class="meta">A-leads</span>
+          <strong id="stat-a">{{ leads | selectattr('lead_tier', 'equalto', 'A') | list | length }}</strong>
+        </div>
+        <div class="stat">
+          <span class="meta">Snit-score</span>
+          <strong id="stat-average">-</strong>
+        </div>
+        <div class="stat">
+          <span class="meta">Shortlist</span>
+          <strong id="stat-shortlist">0</strong>
+        </div>
       </section>
-      {% endfor %}
+
+      <div class="grid">
+        <section class="panel">
+          <h2>Filtre og overblik</h2>
+          <div class="controls">
+            <div class="control-row">
+              <label>Min. score
+                <input id="filter-score" type="number" min="0" max="100" value="{{ config.min_score }}">
+              </label>
+              <label>Tier
+                <select id="filter-tier">
+                  <option value="all">Alle</option>
+                  <option value="A">Kun A</option>
+                  <option value="B">Kun B</option>
+                  <option value="C">Kun C</option>
+                </select>
+              </label>
+            </div>
+            <div class="control-row">
+              <label>Sortering
+                <select id="sort-mode">
+                  <option value="score-desc">Score, hojst forst</option>
+                  <option value="score-asc">Score, lavest forst</option>
+                  <option value="maps-asc">Maps billeder, faest forst</option>
+                  <option value="name-asc">Navn, A-Z</option>
+                </select>
+              </label>
+              <label>Visning
+                <select id="view-mode">
+                  <option value="all">Alle leads</option>
+                  <option value="shortlist">Kun shortlist</option>
+                </select>
+              </label>
+            </div>
+            <label>Sog i navn eller website
+              <input id="filter-text" placeholder="fx restaurant, hotel, .dk">
+            </label>
+            <div class="empty">
+              <strong>Hvordan du bruger den her bedst</strong>
+              <div class="meta">Start med at sortere efter score, markér gode emner med shortlist, og brug derefter detaljepanelet til outreach og manuel vurdering.</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Detaljer</h2>
+          <div class="lead-list">
+            {% for lead in leads %}
+            <article
+              class="lead-card {% if loop.first %}active{% endif %}"
+              id="lead-card-{{ loop.index0 }}"
+              data-score="{{ lead.lead_score }}"
+              data-tier="{{ lead.lead_tier }}"
+              data-name="{{ lead.business_name|lower }}"
+              data-website="{{ lead.website|lower }}"
+            >
+              <h3>{{ lead.business_name }}</h3>
+              <p class="meta">{{ lead.website }} | Tier {{ lead.lead_tier }} | Score {{ lead.lead_score }}/100 | CRM {{ lead.crm_status }}</p>
+              <div class="mini">
+                <div><strong>Hvorfor scorede den hojt:</strong> {{ lead.reasons }}</div>
+                <div><strong>Outreach-vinkel:</strong> {{ lead.outreach_angle }}</div>
+                <div><strong>Naeste handling:</strong> {{ lead.next_action }}</div>
+                <div><strong>Socials:</strong> {{ lead.social_links or '-' }}</div>
+                <div><strong>Maps:</strong> rating {{ lead.maps_rating if lead.maps_rating is not none else '-' }}, reviews {{ lead.maps_review_count if lead.maps_review_count is not none else '-' }}, billeder {{ lead.maps_image_count if lead.maps_image_count is not none else '-' }}</div>
+              </div>
+              <pre>{{ lead.pitch_body }}</pre>
+            </article>
+            {% endfor %}
+          </div>
+        </section>
+      </div>
+
+      <section class="panel" style="margin-top: 18px;">
+        <h2>Leadtabel</h2>
+        <div class="table-wrap">
+          <table id="lead-table">
+            <thead>
+              <tr>
+                <th>Lead</th>
+                <th>Tier</th>
+                <th>Score</th>
+                <th>Maps billeder</th>
+                <th>Kontakt</th>
+                <th>Signal</th>
+                <th>Handling</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for lead in leads %}
+              <tr
+                class="lead-row"
+                data-index="{{ loop.index0 }}"
+                data-score="{{ lead.lead_score }}"
+                data-tier="{{ lead.lead_tier }}"
+                data-name="{{ lead.business_name|lower }}"
+                data-website="{{ lead.website|lower }}"
+                data-maps-images="{{ lead.maps_image_count if lead.maps_image_count is not none else 9999 }}"
+              >
+                <td>
+                  <strong>{{ lead.business_name }}</strong><br>
+                  <span class="meta">{{ lead.website }}</span>
+                </td>
+                <td><span class="pill tier-{{ lead.lead_tier }}">Tier {{ lead.lead_tier }}</span></td>
+                <td>{{ lead.lead_score }}/100</td>
+                <td>{{ lead.maps_image_count if lead.maps_image_count is not none else '-' }}</td>
+                <td>
+                  {{ lead.primary_email or '-' }}<br>
+                  <span class="meta">{{ lead.primary_phone or '' }}</span>
+                </td>
+                <td>{{ lead.reasons }}</td>
+                <td>
+                  <button class="details-btn" type="button" data-index="{{ loop.index0 }}">Detaljer</button>
+                  <button class="shortlist-btn" type="button" data-index="{{ loop.index0 }}">Shortlist</button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      {% endif %}
     </div>
+
+    {% if leads %}
+    <script>
+      const rows = Array.from(document.querySelectorAll('.lead-row'));
+      const cards = Array.from(document.querySelectorAll('.lead-card'));
+      const shortlist = new Set();
+
+      const scoreInput = document.getElementById('filter-score');
+      const tierInput = document.getElementById('filter-tier');
+      const textInput = document.getElementById('filter-text');
+      const viewInput = document.getElementById('view-mode');
+      const sortInput = document.getElementById('sort-mode');
+      const avgStat = document.getElementById('stat-average');
+      const shortlistStat = document.getElementById('stat-shortlist');
+
+      function showCard(index) {
+        cards.forEach(card => card.classList.remove('active'));
+        const target = document.getElementById(`lead-card-${index}`);
+        if (target) target.classList.add('active');
+      }
+
+      function matchesFilters(row) {
+        const minScore = Number(scoreInput.value || 0);
+        const tier = tierInput.value;
+        const text = textInput.value.trim().toLowerCase();
+        const shortlistOnly = viewInput.value === 'shortlist';
+
+        const scoreOk = Number(row.dataset.score) >= minScore;
+        const tierOk = tier === 'all' || row.dataset.tier === tier;
+        const textOk = !text || row.dataset.name.includes(text) || row.dataset.website.includes(text);
+        const shortlistOk = !shortlistOnly || shortlist.has(row.dataset.index);
+
+        return scoreOk && tierOk && textOk && shortlistOk;
+      }
+
+      function updateStats(visibleRows) {
+        const scores = visibleRows.map(row => Number(row.dataset.score));
+        const average = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+        avgStat.textContent = scores.length ? `${average}/100` : '-';
+        shortlistStat.textContent = shortlist.size;
+      }
+
+      function sortRows() {
+        const mode = sortInput.value;
+        rows.sort((a, b) => {
+          if (mode === 'score-desc') return Number(b.dataset.score) - Number(a.dataset.score);
+          if (mode === 'score-asc') return Number(a.dataset.score) - Number(b.dataset.score);
+          if (mode === 'maps-asc') return Number(a.dataset.mapsImages) - Number(b.dataset.mapsImages);
+          if (mode === 'name-asc') return a.dataset.name.localeCompare(b.dataset.name);
+          return 0;
+        });
+
+        const tbody = document.querySelector('#lead-table tbody');
+        rows.forEach(row => tbody.appendChild(row));
+      }
+
+      function applyFilters() {
+        sortRows();
+        const visibleRows = [];
+        rows.forEach(row => {
+          const visible = matchesFilters(row);
+          row.classList.toggle('hidden', !visible);
+          if (visible) visibleRows.push(row);
+        });
+        updateStats(visibleRows);
+      }
+
+      document.querySelectorAll('.details-btn').forEach(button => {
+        button.addEventListener('click', () => showCard(button.dataset.index));
+      });
+
+      document.querySelectorAll('.shortlist-btn').forEach(button => {
+        button.addEventListener('click', () => {
+          const index = button.dataset.index;
+          if (shortlist.has(index)) {
+            shortlist.delete(index);
+            button.classList.remove('active');
+          } else {
+            shortlist.add(index);
+            button.classList.add('active');
+          }
+          applyFilters();
+        });
+      });
+
+      [scoreInput, tierInput, textInput, viewInput, sortInput].forEach(control => {
+        control.addEventListener('input', applyFilters);
+        control.addEventListener('change', applyFilters);
+      });
+
+      applyFilters();
+    </script>
+    {% endif %}
   </body>
 </html>
