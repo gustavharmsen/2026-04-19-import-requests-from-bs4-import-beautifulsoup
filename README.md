@@ -92,6 +92,7 @@ Restaurant B,https://example-b.dk,Esbjerg,restaurant,4.2,96,0,https://maps.googl
 ```
 
 Kolonnenavne er fleksible. Værktøjet forstår fx ogsa `business_name`, `domain`, `reviews`, `photos`, `instagram_url` og lignende.
+Hvis `website` mangler i CSV'en, prover vaerktojet nu at finde det ud fra virksomhedsnavn, by, soegning og evt. sociale links.
 
 ## Output
 

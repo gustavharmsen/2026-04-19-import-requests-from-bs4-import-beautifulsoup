@@ -176,7 +176,7 @@ class BusinessLead:
 
 @dataclass
 class LeadSource:
-    website: str
+    website: str | None
     source_type: str
     row: dict[str, str] = field(default_factory=dict)
 
@@ -346,11 +346,90 @@ def prepare_csv_sources(rows: list[dict[str, str]]) -> list[LeadSource]:
     sources: list[LeadSource] = []
     for row in rows:
         website = get_csv_value(row, "website")
-        if not website:
-            continue
-        row["website"] = normalize_url(website)
-        sources.append(LeadSource(website=row["website"], source_type="csv", row=row))
+        normalized_website = normalize_url(website) if website else None
+        if normalized_website:
+            row["website"] = normalized_website
+        sources.append(LeadSource(website=normalized_website, source_type="csv", row=row))
     return sources
+
+
+def discover_website_for_source(
+    session: requests.Session,
+    source: LeadSource,
+    fallback_city: str,
+    fallback_query: str,
+) -> str | None:
+    if source.website:
+        return source.website
+
+    row = source.row
+    name = get_csv_value(row, "name")
+    city = get_csv_value(row, "city") or fallback_city
+    query = get_csv_value(row, "query") or fallback_query
+
+    social_candidates = extract_candidate_websites_from_social_links(extract_social_links_from_row(row))
+    if social_candidates:
+        return social_candidates[0]
+
+    if not name:
+        return None
+
+    search_phrases = [
+        f"{name} {city} official website",
+        f"{name} {city}",
+        f"{name} {query} {city}",
+    ]
+    for phrase in search_phrases:
+        for search_fn in (search_google_phrase, search_bing_phrase):
+            try:
+                results = search_fn(session, phrase)
+            except requests.RequestException:
+                results = []
+            if results:
+                return results[0]
+
+    return None
+
+
+def search_google_phrase(session: requests.Session, phrase: str) -> list[str]:
+    search_url = f"https://www.google.com/search?q={quote_plus(phrase)}"
+    soup, _ = fetch_soup(session, search_url)
+    websites: list[str] = []
+    for link in soup.find_all("a"):
+        href = link.get("href")
+        if not href:
+            continue
+        parsed_href = extract_google_result_url(href)
+        if not parsed_href or is_blocked_domain(parsed_href):
+            continue
+        websites.append(normalize_url(parsed_href))
+    return list(dict.fromkeys(websites))
+
+
+def search_bing_phrase(session: requests.Session, phrase: str) -> list[str]:
+    search_url = f"https://www.bing.com/search?q={quote_plus(phrase)}"
+    soup, _ = fetch_soup(session, search_url)
+    websites: list[str] = []
+    for link in soup.select("li.b_algo h2 a, a"):
+        href = link.get("href")
+        if not href or not href.startswith("http"):
+            continue
+        if is_blocked_domain(href):
+            continue
+        websites.append(normalize_url(href))
+    return list(dict.fromkeys(websites))
+
+
+def extract_candidate_websites_from_social_links(social_links: dict[str, str]) -> list[str]:
+    candidates: list[str] = []
+    blocked_domains = tuple(SOCIAL_DOMAINS.keys())
+    for _, social_url in social_links.items():
+        parsed = urlparse(social_url)
+        if any(domain in parsed.netloc.lower() for domain in blocked_domains):
+            continue
+        if social_url.startswith("http"):
+            candidates.append(normalize_url(social_url))
+    return list(dict.fromkeys(candidates))
 
 
 def extract_images(session: requests.Session, website: str) -> list[str]:
@@ -890,7 +969,23 @@ def run_scan(config: ScanConfig) -> list[BusinessLead]:
         return []
 
     leads: list[BusinessLead] = []
-    for source in sources[: config.max_businesses]:
+    scanned = 0
+    for source in sources:
+        if scanned >= config.max_businesses:
+            break
+
+        resolved_website = discover_website_for_source(
+            session,
+            source,
+            fallback_city=config.city,
+            fallback_query=config.query,
+        )
+        if not resolved_website:
+            print(f"\nSpringer over kilde uden website: {get_csv_value(source.row, 'name') or source.row or 'ukendt'}")
+            continue
+
+        source.website = resolved_website
+        scanned += 1
         print(f"\nScanner: {source.website}")
         try:
             lead, analyses = analyze_business(
