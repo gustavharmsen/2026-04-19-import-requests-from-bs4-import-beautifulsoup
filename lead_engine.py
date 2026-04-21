@@ -215,49 +215,57 @@ def get_niche_config(niche: str) -> dict[str, Any]:
 
 
 def find_businesses(session: requests.Session, city: str, query: str) -> list[str]:
-    for search_fn in (search_google, search_bing):
-        try:
-            results = search_fn(session, city=city, query=query)
-        except requests.RequestException:
-            results = []
-        if results:
-            return results
-    return []
+    results: list[str] = []
+    for phrase in build_discovery_phrases(city=city, query=query):
+        for search_fn in (search_google_phrase, search_bing_phrase):
+            try:
+                found = search_fn(session, phrase)
+            except requests.RequestException:
+                found = []
+            results.extend(found)
+
+        deduped = list(dict.fromkeys(results))
+        if len(deduped) >= 10:
+            return deduped
+
+    return list(dict.fromkeys(results))
+
+
+def build_discovery_phrases(city: str, query: str) -> list[str]:
+    clean_city = clean_text(city)
+    clean_query = clean_text(query)
+
+    phrases = [
+        f"{clean_query} {clean_city} website",
+        f"{clean_query} {clean_city}",
+        f"{clean_query} i {clean_city}",
+        f"bedste {clean_query} {clean_city}",
+        f"{clean_query} {clean_city} kontakt",
+        f"{clean_query} {clean_city} booking",
+    ]
+
+    if clean_city:
+        phrases.append(f"{clean_query} naer {clean_city}")
+    else:
+        phrases.extend(
+            [
+                f"{clean_query} website",
+                f"bedste {clean_query}",
+                f"{clean_query} kontakt",
+            ]
+        )
+
+    return list(dict.fromkeys(phrase for phrase in phrases if clean_text(phrase)))
 
 
 def search_google(session: requests.Session, city: str, query: str) -> list[str]:
-    search_term = quote_plus(f"{query} {city} website")
-    search_url = f"https://www.google.com/search?q={search_term}"
-    soup, _ = fetch_soup(session, search_url)
-
-    websites: list[str] = []
-    for link in soup.find_all("a"):
-        href = link.get("href")
-        if not href:
-            continue
-        parsed_href = extract_google_result_url(href)
-        if not parsed_href or is_blocked_domain(parsed_href):
-            continue
-        websites.append(normalize_url(parsed_href))
-
-    return list(dict.fromkeys(websites))
+    phrase = f"{query} {city} website"
+    return search_google_phrase(session, phrase)
 
 
 def search_bing(session: requests.Session, city: str, query: str) -> list[str]:
-    search_term = quote_plus(f"{query} {city} website")
-    search_url = f"https://www.bing.com/search?q={search_term}"
-    soup, _ = fetch_soup(session, search_url)
-
-    websites: list[str] = []
-    for link in soup.select("li.b_algo h2 a, a"):
-        href = link.get("href")
-        if not href or not href.startswith("http"):
-            continue
-        if is_blocked_domain(href):
-            continue
-        websites.append(normalize_url(href))
-
-    return list(dict.fromkeys(websites))
+    phrase = f"{query} {city} website"
+    return search_bing_phrase(session, phrase)
 
 
 def extract_google_result_url(href: str) -> str | None:
