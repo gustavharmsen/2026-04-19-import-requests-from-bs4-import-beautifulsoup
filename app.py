@@ -71,7 +71,7 @@ def index():
             "max_businesses": DEFAULT_MAX_BUSINESSES,
             "max_images": DEFAULT_MAX_IMAGES,
             "service_offer": DEFAULT_SERVICE,
-            "min_score": 55,
+            "min_score": 25,
         },
     )
 

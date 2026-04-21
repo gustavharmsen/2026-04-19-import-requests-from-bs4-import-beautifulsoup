@@ -56,6 +56,18 @@
       <h1>{{ leads|length }} leads fundet</h1>
       <p class="meta">Niche: {{ config.niche }}. By: {{ config.city }}. Søgning: {{ config.query }}.</p>
 
+      {% if not leads %}
+      <section class="card">
+        <h2>Ingen leads blev vist</h2>
+        <p>Det betyder typisk en af tre ting:</p>
+        <p>1. Discovery fandt ingen brugbare websites.</p>
+        <p>2. Der blev fundet websites, men de scorede under din valgte minimumsscore.</p>
+        <p>3. Søgningen er for bred eller søgemaskinerne returnerede ikke brugbare resultater.</p>
+        <p><strong>Prøv dette først:</strong> ga tilbage og saet <em>Min. score</em> til <code>0</code> eller <code>25</code>, og sog igen.</p>
+        <p><strong>Gode tests:</strong> `restaurant`, `frisor`, `hotel`, `bilforhandler` sammen med en by.</p>
+      </section>
+      {% endif %}
+
       {% for lead in leads %}
       <section class="card">
         <h2>{{ loop.index }}. {{ lead.business_name }}</h2>
