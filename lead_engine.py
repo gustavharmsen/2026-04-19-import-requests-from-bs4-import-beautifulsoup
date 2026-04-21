@@ -1,7 +1,8 @@
 import argparse
 import csv
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Iterable
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
@@ -19,6 +20,7 @@ USER_AGENT = (
 DEFAULT_TIMEOUT = 10
 MAX_BUSINESSES = 10
 MAX_IMAGES_PER_SITE = 5
+DEFAULT_SERVICE = "hjemmeside, billeder og lokal SEO"
 
 EMAIL_RE = re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b")
 PHONE_RE = re.compile(r"(?:(?:\+|00)\d{1,3}[\s\-]?)?(?:\d[\s\-()]?){6,15}\d")
@@ -76,6 +78,9 @@ class BusinessLead:
     outreach_angle: str
     technologies: str
     social_links: str
+    pitch_subject: str
+    pitch_body: str
+    next_action: str
 
 
 def build_session() -> requests.Session:
@@ -102,10 +107,7 @@ def find_businesses(session: requests.Session, city: str, query: str) -> list[st
             continue
 
         parsed_href = extract_google_result_url(href)
-        if not parsed_href:
-            continue
-
-        if is_blocked_domain(parsed_href):
+        if not parsed_href or is_blocked_domain(parsed_href):
             continue
 
         websites.append(normalize_url(parsed_href))
@@ -320,7 +322,12 @@ def discover_contact_page(soup: BeautifulSoup, base_url: str) -> str | None:
     return None
 
 
-def score_business(profile: SiteProfile, image_count: int, analyses: Iterable[ImageAnalysis]) -> BusinessLead:
+def score_business(
+    profile: SiteProfile,
+    image_count: int,
+    analyses: Iterable[ImageAnalysis],
+    service_offer: str,
+) -> BusinessLead:
     analysis_list = list(analyses)
     reasons: list[str] = []
     score = 50
@@ -398,6 +405,9 @@ def score_business(profile: SiteProfile, image_count: int, analyses: Iterable[Im
     lead_tier = classify_lead_tier(lead_score)
     recommendation = build_recommendation(lead_tier)
     outreach_angle = build_outreach_angle(profile, average_image_score)
+    pitch_subject = build_pitch_subject(profile)
+    pitch_body = build_pitch_body(profile, outreach_angle, service_offer)
+    next_action = build_next_action(lead_tier, profile)
 
     return BusinessLead(
         website=profile.website,
@@ -416,6 +426,9 @@ def score_business(profile: SiteProfile, image_count: int, analyses: Iterable[Im
         outreach_angle=outreach_angle,
         technologies=", ".join(profile.technologies),
         social_links=", ".join(profile.social_links[:3]),
+        pitch_subject=pitch_subject,
+        pitch_body=pitch_body,
+        next_action=next_action,
     )
 
 
@@ -453,7 +466,39 @@ def build_outreach_angle(profile: SiteProfile, average_image_score: float | None
     return "; ".join(angles[:3])
 
 
-def analyze_business(session: requests.Session, website: str, max_images: int) -> tuple[BusinessLead, list[ImageAnalysis]]:
+def build_pitch_subject(profile: SiteProfile) -> str:
+    return f"Ide til at skaffe flere kunder via {profile.business_name}s hjemmeside"
+
+
+def build_pitch_body(profile: SiteProfile, outreach_angle: str, service_offer: str) -> str:
+    greeting_name = profile.business_name
+    return (
+        f"Hej {greeting_name},\n\n"
+        f"Jeg kiggede kort pa jeres hjemmeside og lagde maerke til nogle muligheder for at {outreach_angle}. "
+        f"Jeg arbejder med {service_offer}, og jeg tror, der er et par hurtige forbedringer, som kan styrke "
+        f"baade det visuelle indtryk og hvor nemt det er for nye kunder at tage kontakt.\n\n"
+        "Hvis det har interesse, kan jeg sende 3 konkrete forslag til forbedringer pa jeres nuvaerende side.\n\n"
+        "Bedste hilsner\n"
+        "[Dit navn]"
+    )
+
+
+def build_next_action(lead_tier: str, profile: SiteProfile) -> str:
+    if lead_tier == "A" and profile.emails:
+        return "Send personlig email med 3 konkrete forbedringer"
+    if lead_tier == "A" and profile.phones:
+        return "Ring og folg op med kort email bagefter"
+    if lead_tier == "B":
+        return "Lav manuel gennemgang og prioriter efter branche-fit"
+    return "Gem i pipeline og genbesog senere"
+
+
+def analyze_business(
+    session: requests.Session,
+    website: str,
+    max_images: int,
+    service_offer: str,
+) -> tuple[BusinessLead, list[ImageAnalysis]]:
     profile = extract_site_profile(session, website)
     images = extract_images(session, profile.website)
     analyses: list[ImageAnalysis] = []
@@ -463,54 +508,59 @@ def analyze_business(session: requests.Session, website: str, max_images: int) -
         if analysis:
             analyses.append(analysis)
 
-    lead = score_business(profile, len(images), analyses)
+    lead = score_business(profile, len(images), analyses, service_offer=service_offer)
     return lead, analyses
 
 
 def save_results_to_csv(leads: list[BusinessLead], filepath: str) -> None:
-    fieldnames = [
-        "business_name",
-        "website",
-        "contact_page",
-        "primary_email",
-        "primary_phone",
-        "image_count",
-        "analyzed_count",
-        "best_image_score",
-        "average_image_score",
-        "lead_score",
-        "lead_tier",
-        "reasons",
-        "recommendation",
-        "outreach_angle",
-        "technologies",
-        "social_links",
-    ]
+    fieldnames = list(asdict(leads[0]).keys())
 
     with open(filepath, "w", newline="", encoding="utf-8") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         for lead in leads:
-            writer.writerow(
-                {
-                    "business_name": lead.business_name,
-                    "website": lead.website,
-                    "contact_page": lead.contact_page,
-                    "primary_email": lead.primary_email,
-                    "primary_phone": lead.primary_phone,
-                    "image_count": lead.image_count,
-                    "analyzed_count": lead.analyzed_count,
-                    "best_image_score": lead.best_image_score,
-                    "average_image_score": lead.average_image_score,
-                    "lead_score": lead.lead_score,
-                    "lead_tier": lead.lead_tier,
-                    "reasons": lead.reasons,
-                    "recommendation": lead.recommendation,
-                    "outreach_angle": lead.outreach_angle,
-                    "technologies": lead.technologies,
-                    "social_links": lead.social_links,
-                }
-            )
+            writer.writerow(asdict(lead))
+
+
+def save_results_to_markdown(leads: list[BusinessLead], filepath: str, city: str, query: str, service_offer: str) -> None:
+    lines = [
+        "# Lead Report",
+        "",
+        f"- City: {city}",
+        f"- Query: {query}",
+        f"- Service offer: {service_offer}",
+        f"- Leads found: {len(leads)}",
+        "",
+    ]
+
+    for index, lead in enumerate(sorted(leads, key=lambda item: item.lead_score, reverse=True), start=1):
+        lines.extend(
+            [
+                f"## {index}. {lead.business_name}",
+                "",
+                f"- Website: {lead.website}",
+                f"- Lead tier: {lead.lead_tier}",
+                f"- Lead score: {lead.lead_score}/100",
+                f"- Email: {lead.primary_email or '-'}",
+                f"- Phone: {lead.primary_phone or '-'}",
+                f"- Contact page: {lead.contact_page or '-'}",
+                f"- Outreach angle: {lead.outreach_angle}",
+                f"- Reasons: {lead.reasons}",
+                f"- Recommendation: {lead.recommendation}",
+                f"- Next action: {lead.next_action}",
+                "",
+                "### Outreach Draft",
+                "",
+                f"**Subject:** {lead.pitch_subject}",
+                "",
+                "```text",
+                lead.pitch_body,
+                "```",
+                "",
+            ]
+        )
+
+    Path(filepath).write_text("\n".join(lines), encoding="utf-8")
 
 
 def print_summary(leads: list[BusinessLead]) -> None:
@@ -528,10 +578,19 @@ def print_summary(leads: list[BusinessLead]) -> None:
         print(f"   Gennemsnitlig billede-score: {lead.average_image_score}")
         print(f"   Signal: {lead.reasons}")
         print(f"   Naeste pitch: {lead.outreach_angle}")
+        print(f"   Naeste handling: {lead.next_action}")
         print(f"   Anbefaling: {lead.recommendation}")
 
 
-def run_ai_lead_engine(city: str, query: str, max_businesses: int, max_images: int, output_csv: str | None) -> None:
+def run_ai_lead_engine(
+    city: str,
+    query: str,
+    max_businesses: int,
+    max_images: int,
+    output_csv: str | None,
+    output_md: str | None,
+    service_offer: str,
+) -> None:
     session = build_session()
 
     try:
@@ -548,7 +607,12 @@ def run_ai_lead_engine(city: str, query: str, max_businesses: int, max_images: i
     for website in businesses[:max_businesses]:
         print(f"\nScanner: {website}")
         try:
-            business_lead, analyses = analyze_business(session, website, max_images=max_images)
+            business_lead, analyses = analyze_business(
+                session,
+                website,
+                max_images=max_images,
+                service_offer=service_offer,
+            )
         except requests.RequestException as exc:
             print(f"  Springer over side pa grund af fejl: {exc}")
             continue
@@ -562,11 +626,16 @@ def run_ai_lead_engine(city: str, query: str, max_businesses: int, max_images: i
                 f"score={analysis.score}"
             )
 
+    leads = sorted(leads, key=lambda item: item.lead_score, reverse=True)
     print_summary(leads)
 
     if output_csv and leads:
         save_results_to_csv(leads, output_csv)
         print(f"\nCSV gemt i: {output_csv}")
+
+    if output_md and leads:
+        save_results_to_markdown(leads, output_md, city=city, query=query, service_offer=service_offer)
+        print(f"Markdown rapport gemt i: {output_md}")
 
 
 def clean_text(value: str) -> str:
@@ -581,7 +650,7 @@ def normalize_phone(phone: str) -> str | None:
     return compact
 
 
-def unique_list(values: Iterable[str]) -> list[str]:
+def unique_list(values: Iterable[str | None]) -> list[str]:
     cleaned = [value for value in values if value]
     return list(dict.fromkeys(cleaned))
 
@@ -594,7 +663,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--query", default="restaurant", help="Type virksomhed, fx restaurant eller frisor")
     parser.add_argument("--max-businesses", type=int, default=MAX_BUSINESSES, help="Maks antal websites at scanne")
     parser.add_argument("--max-images", type=int, default=MAX_IMAGES_PER_SITE, help="Maks antal billeder per website")
+    parser.add_argument("--service-offer", default=DEFAULT_SERVICE, help="Din ydelse, som bruges i outreach-udkast")
     parser.add_argument("--output-csv", default="lead_results.csv", help="CSV-fil til resultater")
+    parser.add_argument("--output-md", default="lead_report.md", help="Markdown-rapport til manuel opfolgning")
     return parser.parse_args()
 
 
@@ -606,4 +677,6 @@ if __name__ == "__main__":
         max_businesses=args.max_businesses,
         max_images=args.max_images,
         output_csv=args.output_csv,
+        output_md=args.output_md,
+        service_offer=args.service_offer,
     )
