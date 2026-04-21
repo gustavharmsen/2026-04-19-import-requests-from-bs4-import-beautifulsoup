@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lead Engine</title>
+    <style>
+      :root {
+        --bg: #f4f1ea;
+        --panel: #fffaf1;
+        --ink: #18211f;
+        --muted: #5d6865;
+        --accent: #0c7c59;
+        --accent-2: #d68c45;
+        --line: #ddd2c2;
+      }
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        background: linear-gradient(180deg, #efe7d8 0%, var(--bg) 45%, #f8f6ef 100%);
+        color: var(--ink);
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 32px 20px 60px;
+      }
+      .hero {
+        display: grid;
+        gap: 18px;
+        margin-bottom: 28px;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(2rem, 4vw, 4rem);
+        line-height: 0.95;
+      }
+      .lead {
+        max-width: 760px;
+        color: var(--muted);
+        font-size: 1.05rem;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.3fr 0.7fr;
+        gap: 20px;
+      }
+      .panel {
+        background: rgba(255,250,241,0.88);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 22px;
+        box-shadow: 0 16px 40px rgba(36, 31, 20, 0.08);
+      }
+      .stats {
+        display: grid;
+        gap: 12px;
+      }
+      .stat {
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: #fff;
+        border: 1px solid var(--line);
+      }
+      form {
+        display: grid;
+        gap: 14px;
+      }
+      .two {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 0.95rem;
+      }
+      input, select, textarea, button {
+        font: inherit;
+      }
+      input, select, textarea {
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid #cdbfa9;
+        background: #fff;
+      }
+      textarea {
+        min-height: 130px;
+        resize: vertical;
+      }
+      button {
+        border: 0;
+        border-radius: 999px;
+        background: var(--ink);
+        color: #fff;
+        padding: 14px 20px;
+        cursor: pointer;
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      @media (max-width: 900px) {
+        .grid, .two {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <section class="hero">
+        <div>
+          <h1>Lead Engine v2</h1>
+          <p class="lead">Scan websites, Maps-data og sociale profiler i samme flow. Brug CSV, manuelle websites eller søgning, og få en prioriteret leadliste med outreach-vinkler og lokal database.</p>
+        </div>
+      </section>
+
+      <div class="grid">
+        <section class="panel">
+          <form method="post" enctype="multipart/form-data">
+            <div class="two">
+              <label>By
+                <input name="city" value="{{ defaults.city }}">
+              </label>
+              <label>Søgning
+                <input name="query" value="{{ defaults.query }}">
+              </label>
+            </div>
+            <div class="two">
+              <label>Niche
+                <select name="niche">
+                  {% for niche in niches %}
+                  <option value="{{ niche }}" {% if niche == defaults.niche %}selected{% endif %}>{{ niche }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>Din ydelse
+                <input name="service_offer" value="{{ defaults.service_offer }}">
+              </label>
+            </div>
+            <div class="two">
+              <label>Maks virksomheder
+                <input type="number" name="max_businesses" value="{{ defaults.max_businesses }}">
+              </label>
+              <label>Maks billeder pr. site
+                <input type="number" name="max_images" value="{{ defaults.max_images }}">
+              </label>
+            </div>
+            <label>Min. score
+              <input type="number" name="min_score" value="{{ defaults.min_score }}">
+            </label>
+            <label>Manuelle websites
+              <textarea name="websites" placeholder="https://example.com, https://example.org&#10;eller ét website per linje"></textarea>
+            </label>
+            <label>Kilde-CSV
+              <input type="file" name="source_csv" accept=".csv">
+            </label>
+            <p class="hint">CSV kan indeholde fleksible kolonner som `name`, `website`, `rating`, `review_count`, `image_count`, `maps_url`, `instagram`, `facebook` og lignende.</p>
+            <button type="submit">Kør Lead Scan</button>
+          </form>
+        </section>
+
+        <aside class="panel stats">
+          <div class="stat">
+            <strong>4 spor i samme motor</strong>
+            <div class="hint">Søgning, CSV-import, Maps-signaler og social presence.</div>
+          </div>
+          <div class="stat">
+            <strong>Niche-scoring</strong>
+            <div class="hint">Restaurant, salon, clinic, gym, hotel og default.</div>
+          </div>
+          <div class="stat">
+            <strong>CRM-klar output</strong>
+            <div class="hint">CSV, Markdown og SQLite gemmes lokalt efter hver kørsel.</div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </body>
+</html>

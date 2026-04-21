@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import re
 import sqlite3
 import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
 import cv2
@@ -23,9 +24,15 @@ USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 DEFAULT_TIMEOUT = 10
-MAX_BUSINESSES = 10
-MAX_IMAGES_PER_SITE = 5
 DEFAULT_SERVICE = "hjemmeside, billeder og lokal SEO"
+DEFAULT_CITY = "Esbjerg"
+DEFAULT_QUERY = "restaurant"
+DEFAULT_NICHE = "restaurant"
+DEFAULT_OUTPUT_CSV = "lead_results.csv"
+DEFAULT_OUTPUT_MD = "lead_report.md"
+DEFAULT_OUTPUT_DB = "lead_engine.db"
+DEFAULT_MAX_BUSINESSES = 20
+DEFAULT_MAX_IMAGES = 5
 
 EMAIL_RE = re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b")
 PHONE_RE = re.compile(r"(?:(?:\+|00)\d{1,3}[\s\-]?)?(?:\d[\s\-()]?){6,15}\d")
@@ -41,6 +48,65 @@ PRIORITY_STATUSES = {
     "A": "new-high-priority",
     "B": "review",
     "C": "backlog",
+}
+CSV_ALIASES = {
+    "name": ["name", "business_name", "company", "company_name", "title"],
+    "website": ["website", "domain", "url", "site", "homepage"],
+    "city": ["city", "town", "location"],
+    "query": ["query", "search_query", "category", "segment", "industry"],
+    "rating": ["rating", "maps_rating", "google_rating"],
+    "review_count": ["review_count", "reviews", "maps_reviews", "google_reviews"],
+    "image_count": ["image_count", "photo_count", "photos", "maps_image_count"],
+    "maps_url": ["maps_url", "place_url", "maps_link", "google_maps_url"],
+    "facebook": ["facebook", "facebook_url"],
+    "instagram": ["instagram", "instagram_url"],
+    "linkedin": ["linkedin", "linkedin_url"],
+    "tiktok": ["tiktok", "tiktok_url"],
+    "youtube": ["youtube", "youtube_url"],
+}
+NICHE_CONFIGS = {
+    "restaurant": {
+        "keywords": ["restaurant", "menu", "booking", "take away", "mad", "drinks"],
+        "expected_socials": ["facebook", "instagram"],
+        "needs_booking": True,
+        "needs_menu": True,
+        "maps_weight": 1.2,
+    },
+    "salon": {
+        "keywords": ["frisor", "salon", "hair", "beauty", "booking", "behandling"],
+        "expected_socials": ["instagram", "facebook"],
+        "needs_booking": True,
+        "needs_menu": False,
+        "maps_weight": 1.1,
+    },
+    "clinic": {
+        "keywords": ["klinik", "tandlaege", "behandling", "book", "kontakt"],
+        "expected_socials": ["facebook"],
+        "needs_booking": True,
+        "needs_menu": False,
+        "maps_weight": 0.9,
+    },
+    "gym": {
+        "keywords": ["fitness", "gym", "membership", "hold", "book"],
+        "expected_socials": ["instagram", "facebook", "youtube"],
+        "needs_booking": False,
+        "needs_menu": False,
+        "maps_weight": 1.0,
+    },
+    "hotel": {
+        "keywords": ["hotel", "rooms", "booking", "stay", "restaurant"],
+        "expected_socials": ["instagram", "facebook"],
+        "needs_booking": True,
+        "needs_menu": False,
+        "maps_weight": 1.2,
+    },
+    "default": {
+        "keywords": [],
+        "expected_socials": ["facebook"],
+        "needs_booking": False,
+        "needs_menu": False,
+        "maps_weight": 1.0,
+    },
 }
 
 warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
@@ -64,15 +130,13 @@ class SiteProfile:
     contact_page: str | None
     emails: list[str] = field(default_factory=list)
     phones: list[str] = field(default_factory=list)
-    social_links: list[str] = field(default_factory=list)
+    social_links: dict[str, str] = field(default_factory=dict)
     technologies: list[str] = field(default_factory=list)
     has_booking: bool = False
     has_menu: bool = False
     has_cookie_banner: bool = False
     text_length: int = 0
     matched_keywords: list[str] = field(default_factory=list)
-    contact_score: int = 0
-    content_score: int = 0
 
 
 @dataclass
@@ -82,6 +146,7 @@ class BusinessLead:
     domain: str
     city: str
     search_query: str
+    niche: str
     contact_page: str | None
     primary_email: str | None
     primary_phone: str | None
@@ -106,6 +171,31 @@ class BusinessLead:
     maps_review_count: int | None = None
     maps_image_count: int | None = None
     maps_place_url: str | None = None
+    source_type: str = "search"
+
+
+@dataclass
+class LeadSource:
+    website: str
+    source_type: str
+    row: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class ScanConfig:
+    city: str = DEFAULT_CITY
+    query: str = DEFAULT_QUERY
+    niche: str = DEFAULT_NICHE
+    max_businesses: int = DEFAULT_MAX_BUSINESSES
+    max_images: int = DEFAULT_MAX_IMAGES
+    service_offer: str = DEFAULT_SERVICE
+    min_score: int = 0
+    output_csv: str | None = DEFAULT_OUTPUT_CSV
+    output_md: str | None = DEFAULT_OUTPUT_MD
+    output_db: str | None = DEFAULT_OUTPUT_DB
+    input_websites: str | None = None
+    websites_arg: str | None = None
+    source_csv: str | None = None
 
 
 def build_session() -> requests.Session:
@@ -120,79 +210,19 @@ def fetch_soup(session: requests.Session, url: str) -> tuple[BeautifulSoup, str]
     return BeautifulSoup(response.text, "html.parser"), response.url
 
 
+def get_niche_config(niche: str) -> dict[str, Any]:
+    return NICHE_CONFIGS.get(niche.lower(), NICHE_CONFIGS["default"])
+
+
 def find_businesses(session: requests.Session, city: str, query: str) -> list[str]:
-    google_results = search_google(session, city=city, query=query)
-    if google_results:
-        return google_results
-
-    bing_results = search_bing(session, city=city, query=query)
-    if bing_results:
-        return bing_results
-
+    for search_fn in (search_google, search_bing):
+        try:
+            results = search_fn(session, city=city, query=query)
+        except requests.RequestException:
+            results = []
+        if results:
+            return results
     return []
-
-
-def load_websites_from_file(filepath: str) -> list[str]:
-    path = Path(filepath)
-    if not path.exists():
-        raise FileNotFoundError(f"Filen findes ikke: {filepath}")
-
-    websites: list[str] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        website = clean_text(line)
-        if not website or website.startswith("#"):
-            continue
-        websites.append(normalize_url(website))
-
-    return list(dict.fromkeys(websites))
-
-
-def parse_websites_arg(raw_value: str) -> list[str]:
-    websites = [normalize_url(clean_text(part)) for part in raw_value.split(",") if clean_text(part)]
-    return list(dict.fromkeys(websites))
-
-
-def load_maps_csv(filepath: str) -> list[dict[str, str]]:
-    path = Path(filepath)
-    if not path.exists():
-        raise FileNotFoundError(f"Filen findes ikke: {filepath}")
-
-    with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
-        reader = csv.DictReader(csv_file)
-        rows = [{key.strip().lower(): (value or "").strip() for key, value in row.items()} for row in reader]
-
-    return rows
-
-
-def parse_optional_int(value: str) -> int | None:
-    if not value:
-        return None
-    digits = re.sub(r"[^\d]", "", value)
-    return int(digits) if digits else None
-
-
-def parse_optional_float(value: str) -> float | None:
-    if not value:
-        return None
-    cleaned = value.replace(",", ".")
-    match = re.search(r"\d+(?:\.\d+)?", cleaned)
-    return float(match.group()) if match else None
-
-
-def prepare_maps_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    prepared: list[dict[str, str]] = []
-    for row in rows:
-        website = row.get("website") or row.get("domain") or row.get("url")
-        if not website:
-            continue
-
-        if not website.startswith("http"):
-            website = f"https://{website}"
-
-        row["website"] = normalize_url(website)
-        prepared.append(row)
-
-    return prepared
 
 
 def search_google(session: requests.Session, city: str, query: str) -> list[str]:
@@ -205,11 +235,9 @@ def search_google(session: requests.Session, city: str, query: str) -> list[str]
         href = link.get("href")
         if not href:
             continue
-
         parsed_href = extract_google_result_url(href)
         if not parsed_href or is_blocked_domain(parsed_href):
             continue
-
         websites.append(normalize_url(parsed_href))
 
     return list(dict.fromkeys(websites))
@@ -225,10 +253,8 @@ def search_bing(session: requests.Session, city: str, query: str) -> list[str]:
         href = link.get("href")
         if not href or not href.startswith("http"):
             continue
-
         if is_blocked_domain(href):
             continue
-
         websites.append(normalize_url(href))
 
     return list(dict.fromkeys(websites))
@@ -237,7 +263,6 @@ def search_bing(session: requests.Session, city: str, query: str) -> list[str]:
 def extract_google_result_url(href: str) -> str | None:
     if href.startswith("http"):
         return href
-
     if not href.startswith("/url?"):
         return None
 
@@ -245,7 +270,6 @@ def extract_google_result_url(href: str) -> str | None:
     result_url = query_params.get("q", [None])[0]
     if not result_url or not result_url.startswith("http"):
         return None
-
     return result_url
 
 
@@ -266,9 +290,67 @@ def is_blocked_domain(url: str) -> bool:
 
 
 def normalize_url(url: str) -> str:
-    parsed = urlparse(url)
+    parsed = urlparse(url if "://" in url else f"https://{url}")
     clean_path = parsed.path.rstrip("/") or "/"
     return parsed._replace(query="", fragment="", path=clean_path).geturl()
+
+
+def load_websites_from_file(filepath: str) -> list[str]:
+    path = Path(filepath)
+    if not path.exists():
+        raise FileNotFoundError(f"Filen findes ikke: {filepath}")
+
+    websites: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        website = clean_text(line)
+        if website and not website.startswith("#"):
+            websites.append(normalize_url(website))
+    return list(dict.fromkeys(websites))
+
+
+def parse_websites_arg(raw_value: str) -> list[str]:
+    values = [clean_text(part) for part in raw_value.split(",")]
+    return list(dict.fromkeys(normalize_url(value) for value in values if value))
+
+
+def load_csv_rows(filepath: str) -> list[dict[str, str]]:
+    path = Path(filepath)
+    if not path.exists():
+        raise FileNotFoundError(f"Filen findes ikke: {filepath}")
+
+    with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        return [
+            {clean_text(key).lower(): clean_text(value or "") for key, value in row.items()}
+            for row in reader
+        ]
+
+
+def load_csv_rows_from_text(raw_text: str) -> list[dict[str, str]]:
+    buffer = io.StringIO(raw_text)
+    reader = csv.DictReader(buffer)
+    return [
+        {clean_text(key).lower(): clean_text(value or "") for key, value in row.items()}
+        for row in reader
+    ]
+
+
+def get_csv_value(row: dict[str, str], key: str) -> str:
+    for alias in CSV_ALIASES[key]:
+        if row.get(alias):
+            return row[alias]
+    return ""
+
+
+def prepare_csv_sources(rows: list[dict[str, str]]) -> list[LeadSource]:
+    sources: list[LeadSource] = []
+    for row in rows:
+        website = get_csv_value(row, "website")
+        if not website:
+            continue
+        row["website"] = normalize_url(website)
+        sources.append(LeadSource(website=row["website"], source_type="csv", row=row))
+    return sources
 
 
 def extract_images(session: requests.Session, website: str) -> list[str]:
@@ -279,11 +361,9 @@ def extract_images(session: requests.Session, website: str) -> list[str]:
         src = img.get("src")
         if not src:
             continue
-
         img_url = urljoin(final_url, src)
         if img_url.startswith("http"):
             images.append(img_url)
-
     return list(dict.fromkeys(images))
 
 
@@ -300,21 +380,13 @@ def analyze_image(session: requests.Session, url: str) -> ImageAnalysis | None:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         score = score_image(width=width, height=height, blur_score=blur_score)
-
-        return ImageAnalysis(
-            url=url,
-            width=width,
-            height=height,
-            blur_score=blur_score,
-            score=score,
-        )
+        return ImageAnalysis(url=url, width=width, height=height, blur_score=blur_score, score=score)
     except (requests.RequestException, cv2.error):
         return None
 
 
 def score_image(*, width: int, height: int, blur_score: float) -> int:
     score = 100
-
     if width < 800:
         score -= 25
     if height < 600:
@@ -323,11 +395,17 @@ def score_image(*, width: int, height: int, blur_score: float) -> int:
         score -= 30
     elif blur_score < 150:
         score -= 15
-
     return max(score, 0)
 
 
-def extract_site_profile(session: requests.Session, website: str, query: str, city: str) -> SiteProfile:
+def extract_site_profile(
+    session: requests.Session,
+    website: str,
+    query: str,
+    city: str,
+    niche: str,
+    source_row: dict[str, str] | None = None,
+) -> SiteProfile:
     soup, final_url = fetch_soup(session, website)
     page_text = soup.get_text(" ", strip=True)
 
@@ -342,25 +420,23 @@ def extract_site_profile(session: requests.Session, website: str, query: str, ci
 
     combined_text = f"{page_text} {extra_text}".strip()
     text_lower = combined_text.lower()
-
     title = clean_text(soup.title.string if soup.title and soup.title.string else "")
-    meta_description_tag = soup.find("meta", attrs={"name": "description"})
-    meta_description = clean_text(meta_description_tag.get("content", "") if meta_description_tag else "")
+    meta_tag = soup.find("meta", attrs={"name": "description"})
+    meta_description = clean_text(meta_tag.get("content", "") if meta_tag else "")
+    business_name = extract_business_name(soup, final_url, title, source_row=source_row)
 
-    business_name = extract_business_name(soup, final_url, title)
     emails = unique_list(EMAIL_RE.findall(combined_text) + extract_mailto_links(soup))
-    phones = unique_list(normalize_phone(phone) for phone in PHONE_RE.findall(combined_text))
-    phones = [phone for phone in phones if phone]
-    social_links = unique_list(extract_social_links(soup, final_url))
+    phones = [phone for phone in unique_list(normalize_phone(phone) for phone in PHONE_RE.findall(combined_text)) if phone]
+    social_links = merge_social_links(
+        extract_social_links(soup, final_url),
+        extract_social_links_from_row(source_row or {}),
+    )
     technologies = detect_technologies(soup, final_url)
-    matched_keywords = extract_matched_keywords(text_lower, query=query, city=city)
+    matched_keywords = extract_matched_keywords(text_lower, query=query, city=city, niche=niche)
 
     has_booking = any(word in text_lower for word in ("book", "booking", "reserv", "bestil", "order online"))
-    has_menu = any(word in text_lower for word in ("menu", "menukort", "wine list", "drinks"))
+    has_menu = any(word in text_lower for word in ("menu", "menukort", "wine list", "drinks", "priser"))
     has_cookie_banner = any(word in text_lower for word in ("cookie", "cookies", "gdpr", "privacy"))
-
-    contact_score = int(bool(emails)) + int(bool(phones)) + int(bool(contact_page))
-    content_score = int(bool(meta_description)) + int(len(combined_text) >= 500) + int(bool(matched_keywords))
 
     return SiteProfile(
         website=final_url,
@@ -377,12 +453,20 @@ def extract_site_profile(session: requests.Session, website: str, query: str, ci
         has_cookie_banner=has_cookie_banner,
         text_length=len(combined_text),
         matched_keywords=matched_keywords,
-        contact_score=contact_score,
-        content_score=content_score,
     )
 
 
-def extract_business_name(soup: BeautifulSoup, final_url: str, title: str) -> str:
+def extract_business_name(
+    soup: BeautifulSoup,
+    final_url: str,
+    title: str,
+    source_row: dict[str, str] | None = None,
+) -> str:
+    if source_row:
+        name = get_csv_value(source_row, "name")
+        if name:
+            return name
+
     og_site_name = soup.find("meta", attrs={"property": "og:site_name"})
     if og_site_name and og_site_name.get("content"):
         return clean_text(og_site_name["content"])
@@ -410,23 +494,39 @@ def extract_mailto_links(soup: BeautifulSoup) -> list[str]:
     return results
 
 
-def extract_social_links(soup: BeautifulSoup, base_url: str) -> list[str]:
-    results: list[str] = []
+def extract_social_links(soup: BeautifulSoup, base_url: str) -> dict[str, str]:
+    results: dict[str, str] = {}
     for link in soup.find_all("a", href=True):
         href = urljoin(base_url, link["href"])
         netloc = urlparse(href).netloc.lower()
-        for domain in SOCIAL_DOMAINS:
-            if domain in netloc:
-                results.append(href)
-                break
+        for domain, label in SOCIAL_DOMAINS.items():
+            if domain in netloc and label not in results:
+                results[label] = href
     return results
+
+
+def extract_social_links_from_row(row: dict[str, str]) -> dict[str, str]:
+    results: dict[str, str] = {}
+    for platform in ("facebook", "instagram", "linkedin", "tiktok", "youtube"):
+        value = get_csv_value(row, platform)
+        if value:
+            results[platform] = value
+    return results
+
+
+def merge_social_links(*sources: dict[str, str]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for source in sources:
+        for key, value in source.items():
+            if value and key not in merged:
+                merged[key] = value
+    return merged
 
 
 def detect_technologies(soup: BeautifulSoup, final_url: str) -> list[str]:
     technologies: list[str] = []
     html = str(soup).lower()
     generator = soup.find("meta", attrs={"name": "generator"})
-
     if generator and generator.get("content"):
         technologies.append(clean_text(generator["content"]))
 
@@ -439,7 +539,6 @@ def detect_technologies(soup: BeautifulSoup, final_url: str) -> list[str]:
     for label, needles in checks.items():
         if any(needle in html or needle in final_url.lower() for needle in needles):
             technologies.append(label)
-
     return unique_list(technologies)
 
 
@@ -448,51 +547,66 @@ def discover_contact_page(soup: BeautifulSoup, base_url: str) -> str | None:
         href = urljoin(base_url, link["href"])
         anchor_text = clean_text(link.get_text(" ", strip=True)).lower()
         href_lower = href.lower()
-
         if any(path in href_lower for path in COMMON_CONTACT_PATHS):
             return href
         if any(word in anchor_text for word in ("kontakt", "contact", "about", "om os", "booking")):
             return href
-
     return None
 
 
-def extract_matched_keywords(text_lower: str, query: str, city: str) -> list[str]:
+def extract_matched_keywords(text_lower: str, query: str, city: str, niche: str) -> list[str]:
     query_keywords = [clean_text(part).lower() for part in re.split(r"\W+", query) if part.strip()]
-    candidate_keywords = query_keywords + [city.lower(), "kontakt", "bestil", "booking", "menu"]
+    niche_keywords = get_niche_config(niche).get("keywords", [])
+    candidate_keywords = query_keywords + niche_keywords + [city.lower(), "kontakt", "booking", "menu"]
     return [keyword for keyword in candidate_keywords if keyword and keyword in text_lower]
+
+
+def parse_optional_int(value: str) -> int | None:
+    if not value:
+        return None
+    digits = re.sub(r"[^\d]", "", value)
+    return int(digits) if digits else None
+
+
+def parse_optional_float(value: str) -> float | None:
+    if not value:
+        return None
+    cleaned = value.replace(",", ".")
+    match = re.search(r"\d+(?:\.\d+)?", cleaned)
+    return float(match.group()) if match else None
 
 
 def score_business(
     profile: SiteProfile,
     image_count: int,
-    analyses: Iterable[ImageAnalysis],
+    analyses: list[ImageAnalysis],
     service_offer: str,
     city: str,
     query: str,
-    maps_row: dict[str, str] | None = None,
+    niche: str,
+    source_type: str,
+    source_row: dict[str, str] | None = None,
 ) -> BusinessLead:
-    analysis_list = list(analyses)
+    config = get_niche_config(niche)
     reasons: list[str] = []
     score = 50
 
     if image_count <= 3:
         score += 14
-        reasons.append("fa billeder pa forsiden")
+        reasons.append("fa billeder pa websitet")
     elif image_count >= 12:
         score -= 6
-        reasons.append("mange billeder tilgaengelige")
+        reasons.append("mange billeder pa websitet")
 
-    if not analysis_list:
+    if not analyses:
         score += 18
         reasons.append("ingen brugbare billeder kunne analyseres")
         best_image_score = None
         average_image_score = None
     else:
-        best_image_score = max(item.score for item in analysis_list)
-        average_raw = sum(item.score for item in analysis_list) / len(analysis_list)
+        best_image_score = max(item.score for item in analyses)
+        average_raw = sum(item.score for item in analyses) / len(analyses)
         average_image_score = round(average_raw, 1)
-
         if average_raw < 50:
             score += 20
             reasons.append("lav billedkvalitet")
@@ -503,10 +617,11 @@ def score_business(
             score -= 10
             reasons.append("fornuftig billedkvalitet")
 
-    if profile.contact_score == 0:
+    contact_signals = int(bool(profile.emails)) + int(bool(profile.phones)) + int(bool(profile.contact_page))
+    if contact_signals == 0:
         score += 16
         reasons.append("svag kontaktstruktur")
-    elif profile.contact_score == 1:
+    elif contact_signals == 1:
         score += 8
         reasons.append("begranset kontaktinfo")
     else:
@@ -515,28 +630,32 @@ def score_business(
     if not profile.meta_description:
         score += 8
         reasons.append("mangler meta-beskrivelse")
-
     if profile.text_length < 500:
         score += 8
         reasons.append("meget lidt tekstindhold")
 
-    if not profile.social_links:
-        score += 6
-        reasons.append("ingen synlige sociale links")
-    else:
+    social_penalty = score_social_presence(profile.social_links, niche=niche)
+    score += social_penalty
+    if social_penalty > 0:
+        reasons.append("svag social tilstedevaerelse")
+    elif social_penalty < 0:
+        reasons.append("stabil social tilstedevaerelse")
+
+    if config["needs_booking"] and not profile.has_booking:
+        score += 8
+        reasons.append("mangler tydelig booking")
+    elif profile.has_booking:
         score -= 3
 
-    if not profile.has_booking:
-        score += 5
-        reasons.append("ingen booking eller bestilling fundet")
-
-    if not profile.has_menu:
-        score += 3
-        reasons.append("ingen menu eller produktoversigt fundet")
+    if config["needs_menu"] and not profile.has_menu:
+        score += 6
+        reasons.append("mangler menu eller prisoversigt")
+    elif profile.has_menu:
+        score -= 2
 
     if not profile.has_cookie_banner:
-        score += 4
-        reasons.append("ingen tydelig cookie eller privacy-info")
+        score += 3
+        reasons.append("ingen tydelig privacy eller cookie-info")
 
     if profile.matched_keywords:
         score += 6
@@ -545,44 +664,29 @@ def score_business(
         score -= 5
         reasons.append("svagt match med sokriterier")
 
-    maps_image_count = None
+    maps_name = None
     maps_rating = None
     maps_review_count = None
-    maps_name = None
+    maps_image_count = None
     maps_place_url = None
-    if maps_row:
-        maps_name = maps_row.get("name") or maps_row.get("business_name")
-        maps_place_url = maps_row.get("maps_url") or maps_row.get("place_url") or maps_row.get("maps_link")
-        maps_image_count = parse_optional_int(
-            maps_row.get("image_count")
-            or maps_row.get("photos")
-            or maps_row.get("photo_count")
-            or maps_row.get("maps_image_count")
-            or ""
+    if source_row:
+        maps_name = get_csv_value(source_row, "name") or None
+        maps_place_url = get_csv_value(source_row, "maps_url") or None
+        maps_image_count = parse_optional_int(get_csv_value(source_row, "image_count"))
+        maps_rating = parse_optional_float(get_csv_value(source_row, "rating"))
+        maps_review_count = parse_optional_int(get_csv_value(source_row, "review_count"))
+        score += score_maps_signals(
+            maps_image_count=maps_image_count,
+            maps_rating=maps_rating,
+            maps_review_count=maps_review_count,
+            weight=float(config["maps_weight"]),
+            reasons=reasons,
         )
-        maps_rating = parse_optional_float(maps_row.get("rating") or "")
-        maps_review_count = parse_optional_int(maps_row.get("review_count") or maps_row.get("reviews") or "")
-
-        if maps_image_count is not None:
-            if maps_image_count == 0:
-                score += 22
-                reasons.append("ingen billeder pa maps")
-            elif maps_image_count <= 3:
-                score += 14
-                reasons.append("fa billeder pa maps")
-            elif maps_image_count >= 15:
-                score -= 6
-                reasons.append("mange billeder pa maps")
-
-        if maps_rating is not None and maps_review_count is not None:
-            if maps_rating >= 4.2 and maps_review_count >= 20 and (maps_image_count is None or maps_image_count <= 3):
-                score += 10
-                reasons.append("starkt maps-profil men svag billeddaekning")
 
     lead_score = max(0, min(100, round(score)))
     lead_tier = classify_lead_tier(lead_score)
     recommendation = build_recommendation(lead_tier)
-    outreach_angle = build_outreach_angle(profile, average_image_score)
+    outreach_angle = build_outreach_angle(profile, average_image_score, niche=niche)
     pitch_subject = build_pitch_subject(profile)
     pitch_body = build_pitch_body(profile, outreach_angle, service_offer)
     next_action = build_next_action(lead_tier, profile)
@@ -593,21 +697,22 @@ def score_business(
         domain=urlparse(profile.website).netloc.replace("www.", ""),
         city=city,
         search_query=query,
+        niche=niche,
         contact_page=profile.contact_page,
         primary_email=profile.emails[0] if profile.emails else None,
         primary_phone=profile.phones[0] if profile.phones else None,
         image_count=image_count,
-        analyzed_count=len(analysis_list),
+        analyzed_count=len(analyses),
         best_image_score=best_image_score,
         average_image_score=average_image_score,
         lead_score=lead_score,
         lead_tier=lead_tier,
         crm_status=PRIORITY_STATUSES[lead_tier],
-        reasons=", ".join(reasons[:7]),
+        reasons=", ".join(reasons[:8]),
         recommendation=recommendation,
         outreach_angle=outreach_angle,
         technologies=", ".join(profile.technologies),
-        social_links=", ".join(profile.social_links[:3]),
+        social_links=", ".join(f"{k}:{v}" for k, v in profile.social_links.items()),
         matched_keywords=", ".join(profile.matched_keywords),
         pitch_subject=pitch_subject,
         pitch_body=pitch_body,
@@ -617,7 +722,52 @@ def score_business(
         maps_review_count=maps_review_count,
         maps_image_count=maps_image_count,
         maps_place_url=maps_place_url,
+        source_type=source_type,
     )
+
+
+def score_social_presence(social_links: dict[str, str], niche: str) -> int:
+    expected = get_niche_config(niche)["expected_socials"]
+    present_count = len(social_links)
+    expected_missing = len([platform for platform in expected if platform not in social_links])
+    score_delta = 0
+    if expected_missing:
+        score_delta += expected_missing * 4
+    if present_count >= 3:
+        score_delta -= 6
+    elif present_count == 2:
+        score_delta -= 3
+    elif present_count == 0:
+        score_delta += 6
+    return score_delta
+
+
+def score_maps_signals(
+    maps_image_count: int | None,
+    maps_rating: float | None,
+    maps_review_count: int | None,
+    weight: float,
+    reasons: list[str],
+) -> int:
+    score = 0
+    if maps_image_count is not None:
+        if maps_image_count == 0:
+            score += round(20 * weight)
+            reasons.append("ingen billeder pa maps")
+        elif maps_image_count <= 3:
+            score += round(12 * weight)
+            reasons.append("fa billeder pa maps")
+        elif maps_image_count >= 15:
+            score -= round(5 * weight)
+            reasons.append("mange billeder pa maps")
+
+    if maps_rating is not None and maps_review_count is not None:
+        if maps_rating >= 4.2 and maps_review_count >= 20 and (maps_image_count is None or maps_image_count <= 3):
+            score += round(10 * weight)
+            reasons.append("staerk maps-profil men svag billeddaekning")
+        elif maps_rating < 3.8 and maps_review_count >= 20:
+            score -= round(4 * weight)
+    return score
 
 
 def classify_lead_tier(score: int) -> str:
@@ -636,22 +786,19 @@ def build_recommendation(lead_tier: str) -> str:
     return "Lav prioritet lige nu"
 
 
-def build_outreach_angle(profile: SiteProfile, average_image_score: float | None) -> str:
+def build_outreach_angle(profile: SiteProfile, average_image_score: float | None, niche: str) -> str:
     angles: list[str] = []
-
     if average_image_score is None or average_image_score < 60:
         angles.append("forbedre billeder og visuel praesentation")
     if not profile.contact_page or not profile.emails:
         angles.append("forenkle kontakt og lead-konvertering")
     if not profile.meta_description or profile.text_length < 500:
         angles.append("styrke seo og lokal synlighed")
-    if not profile.has_booking:
+    if get_niche_config(niche)["needs_booking"] and not profile.has_booking:
         angles.append("indfoere tydelig booking eller bestillingsflow")
-
-    if not angles:
-        return "vis manuel gennemgang og find en mere specifik vinkel"
-
-    return "; ".join(angles[:3])
+    if not profile.social_links:
+        angles.append("loefte social proof og platform-tilstedevaerelse")
+    return "; ".join(angles[:3]) if angles else "vis manuel gennemgang og find en mere specifik vinkel"
 
 
 def build_pitch_subject(profile: SiteProfile) -> str:
@@ -659,13 +806,12 @@ def build_pitch_subject(profile: SiteProfile) -> str:
 
 
 def build_pitch_body(profile: SiteProfile, outreach_angle: str, service_offer: str) -> str:
-    greeting_name = profile.business_name
     return (
-        f"Hej {greeting_name},\n\n"
-        f"Jeg kiggede kort pa jeres hjemmeside og lagde maerke til nogle muligheder for at {outreach_angle}. "
+        f"Hej {profile.business_name},\n\n"
+        f"Jeg kiggede kort pa jeres online tilstedevaerelse og lagde maerke til nogle muligheder for at {outreach_angle}. "
         f"Jeg arbejder med {service_offer}, og jeg tror, der er et par hurtige forbedringer, som kan styrke "
         f"baade det visuelle indtryk og hvor nemt det er for nye kunder at tage kontakt.\n\n"
-        "Hvis det har interesse, kan jeg sende 3 konkrete forslag til forbedringer pa jeres nuvaerende side.\n\n"
+        "Hvis det har interesse, kan jeg sende 3 konkrete forslag til forbedringer pa jeres nuvaerende setup.\n\n"
         "Bedste hilsner\n"
         "[Dit navn]"
     )
@@ -683,37 +829,115 @@ def build_next_action(lead_tier: str, profile: SiteProfile) -> str:
 
 def analyze_business(
     session: requests.Session,
-    website: str,
+    source: LeadSource,
     max_images: int,
     service_offer: str,
     city: str,
     query: str,
-    maps_row: dict[str, str] | None = None,
+    niche: str,
 ) -> tuple[BusinessLead, list[ImageAnalysis]]:
-    profile = extract_site_profile(session, website, query=query, city=city)
+    profile = extract_site_profile(
+        session,
+        source.website,
+        query=query,
+        city=city,
+        niche=niche,
+        source_row=source.row,
+    )
     images = extract_images(session, profile.website)
     analyses: list[ImageAnalysis] = []
-
     for img_url in images[:max_images]:
         analysis = analyze_image(session, img_url)
         if analysis:
             analyses.append(analysis)
 
     lead = score_business(
-        profile,
-        len(images),
-        analyses,
+        profile=profile,
+        image_count=len(images),
+        analyses=analyses,
         service_offer=service_offer,
         city=city,
         query=query,
-        maps_row=maps_row,
+        niche=niche,
+        source_type=source.source_type,
+        source_row=source.row,
     )
     return lead, analyses
 
 
+def collect_sources(config: ScanConfig, session: requests.Session) -> list[LeadSource]:
+    if config.source_csv:
+        return prepare_csv_sources(load_csv_rows(config.source_csv))
+    if config.websites_arg:
+        return [LeadSource(website=url, source_type="manual") for url in parse_websites_arg(config.websites_arg)]
+    if config.input_websites:
+        return [LeadSource(website=url, source_type="manual") for url in load_websites_from_file(config.input_websites)]
+
+    found = find_businesses(session, city=config.city, query=config.query)
+    return [LeadSource(website=url, source_type="search") for url in found]
+
+
+def run_scan(config: ScanConfig) -> list[BusinessLead]:
+    session = build_session()
+    try:
+        sources = collect_sources(config, session)
+    except (FileNotFoundError, requests.RequestException) as exc:
+        print(str(exc))
+        return []
+
+    if not sources:
+        print("Ingen virksomheder blev fundet. Proev --source-csv, --websites eller --input-websites.")
+        return []
+
+    leads: list[BusinessLead] = []
+    for source in sources[: config.max_businesses]:
+        print(f"\nScanner: {source.website}")
+        try:
+            lead, analyses = analyze_business(
+                session=session,
+                source=source,
+                max_images=config.max_images,
+                service_offer=config.service_offer,
+                city=get_csv_value(source.row, "city") or config.city,
+                query=get_csv_value(source.row, "query") or config.query,
+                niche=config.niche,
+            )
+        except requests.RequestException as exc:
+            print(f"  Springer over side pa grund af fejl: {exc}")
+            continue
+
+        if lead.lead_score >= config.min_score:
+            leads.append(lead)
+        for analysis in analyses:
+            print(
+                f"  Billede: {analysis.url} | "
+                f"{analysis.width}x{analysis.height} | "
+                f"blur={analysis.blur_score:.1f} | "
+                f"score={analysis.score}"
+            )
+
+    leads = sorted(leads, key=lambda item: item.lead_score, reverse=True)
+    print_summary(leads)
+    persist_outputs(leads, config)
+    return leads
+
+
+def persist_outputs(leads: list[BusinessLead], config: ScanConfig) -> None:
+    if not leads:
+        return
+    if config.output_csv:
+        save_results_to_csv(leads, config.output_csv)
+        print(f"\nCSV gemt i: {config.output_csv}")
+    if config.output_md:
+        save_results_to_markdown(leads, config.output_md, config=config)
+        print(f"Markdown rapport gemt i: {config.output_md}")
+    if config.output_db:
+        save_results_to_sqlite(leads, config.output_db)
+        print(f"SQLite database gemt i: {config.output_db}")
+
+
 def save_results_to_csv(leads: list[BusinessLead], filepath: str) -> None:
     fieldnames = list(asdict(leads[0]).keys())
-
     with open(filepath, "w", newline="", encoding="utf-8") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
@@ -721,17 +945,17 @@ def save_results_to_csv(leads: list[BusinessLead], filepath: str) -> None:
             writer.writerow(asdict(lead))
 
 
-def save_results_to_markdown(leads: list[BusinessLead], filepath: str, city: str, query: str, service_offer: str) -> None:
+def save_results_to_markdown(leads: list[BusinessLead], filepath: str, config: ScanConfig) -> None:
     lines = [
         "# Lead Report",
         "",
-        f"- City: {city}",
-        f"- Query: {query}",
-        f"- Service offer: {service_offer}",
+        f"- City: {config.city}",
+        f"- Query: {config.query}",
+        f"- Niche: {config.niche}",
+        f"- Service offer: {config.service_offer}",
         f"- Leads found: {len(leads)}",
         "",
     ]
-
     for index, lead in enumerate(leads, start=1):
         lines.extend(
             [
@@ -742,14 +966,14 @@ def save_results_to_markdown(leads: list[BusinessLead], filepath: str, city: str
                 f"- Lead tier: {lead.lead_tier}",
                 f"- Lead score: {lead.lead_score}/100",
                 f"- CRM status: {lead.crm_status}",
+                f"- Source type: {lead.source_type}",
                 f"- Email: {lead.primary_email or '-'}",
                 f"- Phone: {lead.primary_phone or '-'}",
-                f"- Maps name: {lead.maps_name or '-'}",
                 f"- Maps rating: {lead.maps_rating if lead.maps_rating is not None else '-'}",
                 f"- Maps reviews: {lead.maps_review_count if lead.maps_review_count is not None else '-'}",
                 f"- Maps images: {lead.maps_image_count if lead.maps_image_count is not None else '-'}",
-                f"- Maps link: {lead.maps_place_url or '-'}",
                 f"- Contact page: {lead.contact_page or '-'}",
+                f"- Socials: {lead.social_links or '-'}",
                 f"- Matched keywords: {lead.matched_keywords or '-'}",
                 f"- Outreach angle: {lead.outreach_angle}",
                 f"- Reasons: {lead.reasons}",
@@ -766,7 +990,6 @@ def save_results_to_markdown(leads: list[BusinessLead], filepath: str, city: str
                 "",
             ]
         )
-
     Path(filepath).write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -781,6 +1004,7 @@ def save_results_to_sqlite(leads: list[BusinessLead], filepath: str) -> None:
                 website TEXT NOT NULL,
                 city TEXT,
                 search_query TEXT,
+                niche TEXT,
                 contact_page TEXT,
                 primary_email TEXT,
                 primary_phone TEXT,
@@ -799,58 +1023,29 @@ def save_results_to_sqlite(leads: list[BusinessLead], filepath: str) -> None:
                 matched_keywords TEXT,
                 pitch_subject TEXT,
                 pitch_body TEXT,
-                next_action TEXT
+                next_action TEXT,
+                maps_name TEXT,
+                maps_rating REAL,
+                maps_review_count INTEGER,
+                maps_image_count INTEGER,
+                maps_place_url TEXT,
+                source_type TEXT
             )
             """
         )
-
         for lead in leads:
             row = asdict(lead)
+            fields = ", ".join(row.keys())
+            placeholders = ", ".join(f":{key}" for key in row.keys())
+            updates = ", ".join(f"{key}=excluded.{key}" for key in row.keys() if key != "domain")
             conn.execute(
-                """
-                INSERT INTO leads (
-                    business_name, website, domain, city, search_query, contact_page,
-                    primary_email, primary_phone, image_count, analyzed_count,
-                    best_image_score, average_image_score, lead_score, lead_tier,
-                    crm_status, reasons, recommendation, outreach_angle,
-                    technologies, social_links, matched_keywords,
-                    pitch_subject, pitch_body, next_action
-                ) VALUES (
-                    :business_name, :website, :domain, :city, :search_query, :contact_page,
-                    :primary_email, :primary_phone, :image_count, :analyzed_count,
-                    :best_image_score, :average_image_score, :lead_score, :lead_tier,
-                    :crm_status, :reasons, :recommendation, :outreach_angle,
-                    :technologies, :social_links, :matched_keywords,
-                    :pitch_subject, :pitch_body, :next_action
-                )
-                ON CONFLICT(domain) DO UPDATE SET
-                    business_name=excluded.business_name,
-                    website=excluded.website,
-                    city=excluded.city,
-                    search_query=excluded.search_query,
-                    contact_page=excluded.contact_page,
-                    primary_email=excluded.primary_email,
-                    primary_phone=excluded.primary_phone,
-                    image_count=excluded.image_count,
-                    analyzed_count=excluded.analyzed_count,
-                    best_image_score=excluded.best_image_score,
-                    average_image_score=excluded.average_image_score,
-                    lead_score=excluded.lead_score,
-                    lead_tier=excluded.lead_tier,
-                    crm_status=excluded.crm_status,
-                    reasons=excluded.reasons,
-                    recommendation=excluded.recommendation,
-                    outreach_angle=excluded.outreach_angle,
-                    technologies=excluded.technologies,
-                    social_links=excluded.social_links,
-                    matched_keywords=excluded.matched_keywords,
-                    pitch_subject=excluded.pitch_subject,
-                    pitch_body=excluded.pitch_body,
-                    next_action=excluded.next_action
+                f"""
+                INSERT INTO leads ({fields})
+                VALUES ({placeholders})
+                ON CONFLICT(domain) DO UPDATE SET {updates}
                 """,
                 row,
             )
-
         conn.commit()
     finally:
         conn.close()
@@ -860,110 +1055,20 @@ def print_summary(leads: list[BusinessLead]) -> None:
     if not leads:
         print("Ingen virksomheder blev fundet.")
         return
-
     print("\n=== PROFESSIONEL LEADLISTE ===")
     for index, lead in enumerate(leads, start=1):
         print(f"\n{index}. {lead.business_name} ({lead.website})")
         print(f"   Tier: {lead.lead_tier} | Lead score: {lead.lead_score}/100 | CRM: {lead.crm_status}")
         print(f"   Email: {lead.primary_email or '-'} | Telefon: {lead.primary_phone or '-'}")
         print(f"   Kontakt-side: {lead.contact_page or '-'}")
-        print(f"   Match: {lead.matched_keywords or '-'}")
-        print(f"   Billeder: {lead.image_count} fundet, {lead.analyzed_count} analyseret")
+        print(f"   Socials: {lead.social_links or '-'}")
+        print(f"   Maps billeder: {lead.maps_image_count if lead.maps_image_count is not None else '-'}")
         print(f"   Signal: {lead.reasons}")
-        print(f"   Naeste pitch: {lead.outreach_angle}")
         print(f"   Naeste handling: {lead.next_action}")
 
 
-def run_ai_lead_engine(
-    city: str,
-    query: str,
-    max_businesses: int,
-    max_images: int,
-    output_csv: str | None,
-    output_md: str | None,
-    output_db: str | None,
-    service_offer: str,
-    min_score: int,
-    input_websites: str | None,
-    websites_arg: str | None,
-    maps_csv: str | None,
-) -> None:
-    session = build_session()
-
-    maps_rows_by_website: dict[str, dict[str, str]] = {}
-    if maps_csv:
-        try:
-            maps_rows = prepare_maps_rows(load_maps_csv(maps_csv))
-        except FileNotFoundError as exc:
-            print(str(exc))
-            return
-        businesses = [row["website"] for row in maps_rows]
-        maps_rows_by_website = {row["website"]: row for row in maps_rows}
-    elif websites_arg:
-        businesses = parse_websites_arg(websites_arg)
-    elif input_websites:
-        try:
-            businesses = load_websites_from_file(input_websites)
-        except FileNotFoundError as exc:
-            print(str(exc))
-            return
-    else:
-        try:
-            businesses = find_businesses(session, city=city, query=query)
-        except requests.RequestException as exc:
-            print(f"Kunne ikke hente virksomheder: {exc}")
-            return
-
-    if not businesses:
-        print("Ingen virksomheder blev fundet. Proev --websites eller --input-websites for at scanne en manuel liste.")
-        return
-
-    leads: list[BusinessLead] = []
-    for website in businesses[:max_businesses]:
-        print(f"\nScanner: {website}")
-        try:
-            business_lead, analyses = analyze_business(
-                session,
-                website,
-                max_images=max_images,
-                service_offer=service_offer,
-                city=city,
-                query=query,
-                maps_row=maps_rows_by_website.get(website),
-            )
-        except requests.RequestException as exc:
-            print(f"  Springer over side pa grund af fejl: {exc}")
-            continue
-
-        if business_lead.lead_score >= min_score:
-            leads.append(business_lead)
-
-        for analysis in analyses:
-            print(
-                f"  Billede: {analysis.url} | "
-                f"{analysis.width}x{analysis.height} | "
-                f"blur={analysis.blur_score:.1f} | "
-                f"score={analysis.score}"
-            )
-
-    leads = sorted(leads, key=lambda item: item.lead_score, reverse=True)
-    print_summary(leads)
-
-    if output_csv and leads:
-        save_results_to_csv(leads, output_csv)
-        print(f"\nCSV gemt i: {output_csv}")
-
-    if output_md and leads:
-        save_results_to_markdown(leads, output_md, city=city, query=query, service_offer=service_offer)
-        print(f"Markdown rapport gemt i: {output_md}")
-
-    if output_db and leads:
-        save_results_to_sqlite(leads, output_db)
-        print(f"SQLite database gemt i: {output_db}")
-
-
 def clean_text(value: str) -> str:
-    return " ".join(value.split()).strip()
+    return " ".join(str(value).split()).strip()
 
 
 def normalize_phone(phone: str) -> str | None:
@@ -974,43 +1079,48 @@ def normalize_phone(phone: str) -> str | None:
     return compact
 
 
-def unique_list(values: Iterable[str | None]) -> list[str]:
+def unique_list(values: Any) -> list[str]:
     cleaned = [value for value in values if value]
     return list(dict.fromkeys(cleaned))
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Find potentielle kunder og score deres hjemmeside som salgslead."
+        description="Find potentielle kunder og score deres online tilstedevaerelse som salgslead."
     )
-    parser.add_argument("--city", default="Esbjerg", help="By der skal soges i")
-    parser.add_argument("--query", default="restaurant", help="Type virksomhed, fx restaurant eller frisor")
-    parser.add_argument("--max-businesses", type=int, default=MAX_BUSINESSES, help="Maks antal websites at scanne")
-    parser.add_argument("--max-images", type=int, default=MAX_IMAGES_PER_SITE, help="Maks antal billeder per website")
-    parser.add_argument("--service-offer", default=DEFAULT_SERVICE, help="Din ydelse, som bruges i outreach-udkast")
-    parser.add_argument("--min-score", type=int, default=0, help="Filtrer leads under denne score")
-    parser.add_argument("--websites", help="Kommasepareret liste af websites der skal scannes direkte")
-    parser.add_argument("--input-websites", help="Tekstfil med et website per linje")
-    parser.add_argument("--maps-csv", help="CSV med virksomheder fra Maps eller anden kilde. Forventede felter: website plus evt. name, rating, review_count, image_count, maps_url")
-    parser.add_argument("--output-csv", default="lead_results.csv", help="CSV-fil til resultater")
-    parser.add_argument("--output-md", default="lead_report.md", help="Markdown-rapport til manuel opfolgning")
-    parser.add_argument("--output-db", default="lead_engine.db", help="SQLite-database til lokal leadhistorik")
+    parser.add_argument("--city", default=DEFAULT_CITY)
+    parser.add_argument("--query", default=DEFAULT_QUERY)
+    parser.add_argument("--niche", default=DEFAULT_NICHE, choices=sorted(NICHE_CONFIGS.keys()))
+    parser.add_argument("--max-businesses", type=int, default=DEFAULT_MAX_BUSINESSES)
+    parser.add_argument("--max-images", type=int, default=DEFAULT_MAX_IMAGES)
+    parser.add_argument("--service-offer", default=DEFAULT_SERVICE)
+    parser.add_argument("--min-score", type=int, default=0)
+    parser.add_argument("--websites")
+    parser.add_argument("--input-websites")
+    parser.add_argument("--source-csv", help="CSV med virksomheder, Maps-felter og sociale links")
+    parser.add_argument("--output-csv", default=DEFAULT_OUTPUT_CSV)
+    parser.add_argument("--output-md", default=DEFAULT_OUTPUT_MD)
+    parser.add_argument("--output-db", default=DEFAULT_OUTPUT_DB)
     return parser.parse_args()
 
 
-if __name__ == "__main__":
-    args = parse_args()
-    run_ai_lead_engine(
+def config_from_args(args: argparse.Namespace) -> ScanConfig:
+    return ScanConfig(
         city=args.city,
         query=args.query,
+        niche=args.niche,
         max_businesses=args.max_businesses,
         max_images=args.max_images,
+        service_offer=args.service_offer,
+        min_score=args.min_score,
+        websites_arg=args.websites,
+        input_websites=args.input_websites,
+        source_csv=args.source_csv,
         output_csv=args.output_csv,
         output_md=args.output_md,
         output_db=args.output_db,
-        service_offer=args.service_offer,
-        min_score=args.min_score,
-        input_websites=args.input_websites,
-        websites_arg=args.websites,
-        maps_csv=args.maps_csv,
     )
+
+
+if __name__ == "__main__":
+    run_scan(config_from_args(parse_args()))

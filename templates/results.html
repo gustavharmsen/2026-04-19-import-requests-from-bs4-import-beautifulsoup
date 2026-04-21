@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lead Resultater</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        background: #f5f1e8;
+        color: #18211f;
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 28px 20px 50px;
+      }
+      a {
+        color: #0c7c59;
+      }
+      .actions {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 24px;
+      }
+      .card {
+        background: #fffaf1;
+        border: 1px solid #ddd2c2;
+        border-radius: 22px;
+        padding: 18px 20px;
+        margin-bottom: 16px;
+        box-shadow: 0 10px 30px rgba(36, 31, 20, 0.07);
+      }
+      .meta {
+        color: #56625d;
+      }
+      pre {
+        white-space: pre-wrap;
+        background: #fff;
+        padding: 14px;
+        border-radius: 14px;
+        border: 1px solid #ddd2c2;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="actions">
+        <a href="{{ url_for('index') }}">Ny kørsel</a>
+        {% if csv_name %}<a href="{{ url_for('download', filename=csv_name) }}">Download CSV</a>{% endif %}
+        {% if md_name %}<a href="{{ url_for('download', filename=md_name) }}">Download rapport</a>{% endif %}
+      </div>
+
+      <h1>{{ leads|length }} leads fundet</h1>
+      <p class="meta">Niche: {{ config.niche }}. By: {{ config.city }}. Søgning: {{ config.query }}.</p>
+
+      {% for lead in leads %}
+      <section class="card">
+        <h2>{{ loop.index }}. {{ lead.business_name }}</h2>
+        <p class="meta">{{ lead.website }} | Tier {{ lead.lead_tier }} | Score {{ lead.lead_score }}/100 | CRM {{ lead.crm_status }}</p>
+        <p><strong>Outreach-vinkel:</strong> {{ lead.outreach_angle }}</p>
+        <p><strong>Signaler:</strong> {{ lead.reasons }}</p>
+        <p><strong>Socials:</strong> {{ lead.social_links or '-' }}</p>
+        <p><strong>Maps:</strong> rating {{ lead.maps_rating if lead.maps_rating is not none else '-' }}, reviews {{ lead.maps_review_count if lead.maps_review_count is not none else '-' }}, billeder {{ lead.maps_image_count if lead.maps_image_count is not none else '-' }}</p>
+        <pre>{{ lead.pitch_body }}</pre>
+      </section>
+      {% endfor %}
+    </div>
+  </body>
+</html>

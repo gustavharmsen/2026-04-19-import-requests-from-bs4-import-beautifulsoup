@@ -1,0 +1,3 @@
+name,website,city,query,rating,review_count,image_count,maps_url,instagram,facebook
+Restaurant A,https://example-a.dk,Esbjerg,restaurant,4.5,187,1,https://maps.google.com/example-a,https://instagram.com/examplea,https://facebook.com/examplea
+Restaurant B,https://example-b.dk,Esbjerg,restaurant,4.2,96,0,https://maps.google.com/example-b,,
