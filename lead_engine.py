@@ -217,7 +217,7 @@ def get_niche_config(niche: str) -> dict[str, Any]:
 def find_businesses(session: requests.Session, city: str, query: str) -> list[str]:
     results: list[str] = []
     for phrase in build_discovery_phrases(city=city, query=query):
-        for search_fn in (search_google_phrase, search_bing_phrase):
+        for search_fn in (search_google_phrase, search_bing_phrase, search_duckduckgo_phrase):
             try:
                 found = search_fn(session, phrase)
             except requests.RequestException:
@@ -388,7 +388,7 @@ def discover_website_for_source(
         f"{name} {query} {city}",
     ]
     for phrase in search_phrases:
-        for search_fn in (search_google_phrase, search_bing_phrase):
+        for search_fn in (search_google_phrase, search_bing_phrase, search_duckduckgo_phrase):
             try:
                 results = search_fn(session, phrase)
             except requests.RequestException:
@@ -426,6 +426,34 @@ def search_bing_phrase(session: requests.Session, phrase: str) -> list[str]:
             continue
         websites.append(normalize_url(href))
     return list(dict.fromkeys(websites))
+
+
+def search_duckduckgo_phrase(session: requests.Session, phrase: str) -> list[str]:
+    search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(phrase)}"
+    soup, _ = fetch_soup(session, search_url)
+    websites: list[str] = []
+    for link in soup.select("a.result__a, a[href]"):
+        href = link.get("href")
+        if not href:
+            continue
+        parsed_href = extract_duckduckgo_result_url(href)
+        if not parsed_href or is_blocked_domain(parsed_href):
+            continue
+        websites.append(normalize_url(parsed_href))
+    return list(dict.fromkeys(websites))
+
+
+def extract_duckduckgo_result_url(href: str) -> str | None:
+    if href.startswith("http"):
+        return href
+    if not href.startswith("//duckduckgo.com/l/?") and not href.startswith("/l/?"):
+        return None
+
+    query_params = parse_qs(urlparse(href).query)
+    result_url = query_params.get("uddg", [None])[0]
+    if not result_url or not result_url.startswith("http"):
+        return None
+    return result_url
 
 
 def extract_candidate_websites_from_social_links(social_links: dict[str, str]) -> list[str]:
