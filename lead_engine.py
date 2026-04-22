@@ -392,6 +392,7 @@ def extract_google_result_url(href: str) -> str | None:
 def is_blocked_domain(url: str) -> bool:
     blocked_fragments = (
         "google.",
+        "duckduckgo.com",
         "youtube.com",
         "facebook.com",
         "instagram.com",
@@ -400,6 +401,7 @@ def is_blocked_domain(url: str) -> bool:
         "linkedin.com",
         "tiktok.com",
         "wikipedia.org",
+        "microsoft.com",
     )
     netloc = urlparse(url).netloc.lower()
     return any(fragment in netloc for fragment in blocked_fragments)
