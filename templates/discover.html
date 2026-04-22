@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Kandidatfund</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        background: linear-gradient(180deg, #efe6d8 0%, #f5f1e8 45%, #f8f6ef 100%);
+        color: #18211f;
+      }
+      .wrap {
+        max-width: 1150px;
+        margin: 0 auto;
+        padding: 28px 20px 50px;
+      }
+      .panel {
+        background: #fffaf1;
+        border: 1px solid #ddd2c2;
+        border-radius: 24px;
+        padding: 20px;
+        box-shadow: 0 12px 30px rgba(36, 31, 20, 0.07);
+      }
+      .actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 20px;
+      }
+      .button, button {
+        font: inherit;
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 16px;
+        cursor: pointer;
+        background: #18211f;
+        color: #fff;
+      }
+      .copy-btn {
+        font: inherit;
+        border: 1px solid #ddd2c2;
+        border-radius: 999px;
+        padding: 8px 12px;
+        cursor: pointer;
+        background: #fff;
+        color: #18211f;
+        margin-top: 8px;
+      }
+      a.button {
+        text-decoration: none;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        text-align: left;
+        padding: 12px 10px;
+        border-bottom: 1px solid #eadfce;
+        vertical-align: top;
+      }
+      th {
+        background: #f7f1e7;
+      }
+      .status {
+        display: inline-flex;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: #efe4d2;
+        font-size: 0.82rem;
+      }
+      .found { background: #dff3e7; }
+      .missing { background: #f7ddd5; }
+      .meta { color: #56625d; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="actions">
+        <a class="button" href="{{ url_for('index') }}">Tilbage</a>
+        {% if discovered_websites %}
+        <form method="post" action="{{ url_for('score_candidates') }}">
+          <input type="hidden" name="city" value="{{ config.city }}">
+          <input type="hidden" name="query" value="{{ config.query }}">
+          <input type="hidden" name="niche" value="{{ config.niche }}">
+          <input type="hidden" name="max_businesses" value="{{ config.max_businesses }}">
+          <input type="hidden" name="max_images" value="{{ config.max_images }}">
+          <input type="hidden" name="service_offer" value="{{ config.service_offer }}">
+          <input type="hidden" name="min_score" value="{{ config.min_score }}">
+          <input type="hidden" name="websites" value="{{ discovered_websites|join(',') }}">
+          <button type="submit">Score fundne kandidater</button>
+        </form>
+        {% endif %}
+      </div>
+
+      <section class="panel">
+        <h1>Kandidater fundet via discovery</h1>
+        <p class="meta">Her kan du se hvad systemet faktisk fandt for søgningen <strong>{{ config.query }}</strong> i <strong>{{ config.city }}</strong>, før scoring køres.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Kandidat</th>
+              <th>Status</th>
+              <th>Website</th>
+              <th>Detalje</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for attempt in attempts %}
+            <tr>
+              <td>
+                <strong>{{ attempt.input_name }}</strong><br>
+                <span class="meta">{{ attempt.search_query }} i {{ attempt.search_city }}</span>
+              </td>
+              <td>
+                {% if attempt.discovery_status == 'fundet' %}
+                <span class="status found">Fundet</span>
+                {% else %}
+                <span class="status missing">Ikke fundet</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if attempt.discovered_website %}
+                <div>{{ attempt.discovered_website }}</div>
+                <button class="button open-link-btn" type="button" data-url="{{ attempt.discovered_website }}">Aabn hjemmeside</button>
+                <button class="copy-btn" type="button" data-url="{{ attempt.discovered_website }}">Kopier link</button>
+                {% else %}
+                -
+                {% endif %}
+              </td>
+              <td>{{ attempt.detail }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </div>
+    <script>
+      document.querySelectorAll('.open-link-btn').forEach(button => {
+        button.addEventListener('click', () => {
+          const url = button.dataset.url;
+          window.location.href = url;
+        });
+      });
+
+      document.querySelectorAll('.copy-btn').forEach(button => {
+        button.addEventListener('click', async () => {
+          const url = button.dataset.url;
+          try {
+            await navigator.clipboard.writeText(url);
+            button.textContent = 'Link kopieret';
+            setTimeout(() => {
+              button.textContent = 'Kopier link';
+            }, 1400);
+          } catch (error) {
+            window.prompt('Kopier dette link:', url);
+          }
+        });
+      });
+    </script>
+  </body>
+</html>

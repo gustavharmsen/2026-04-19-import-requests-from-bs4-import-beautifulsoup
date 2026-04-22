@@ -28,6 +28,7 @@ DEFAULT_SERVICE = "hjemmeside, billeder og lokal SEO"
 DEFAULT_CITY = "Esbjerg"
 DEFAULT_QUERY = "restaurant"
 DEFAULT_NICHE = "restaurant"
+ALL_BUSINESSES_QUERY = "__all_businesses__"
 DEFAULT_OUTPUT_CSV = "lead_results.csv"
 DEFAULT_OUTPUT_MD = "lead_report.md"
 DEFAULT_OUTPUT_DB = "lead_engine.db"
@@ -65,6 +66,83 @@ CSV_ALIASES = {
     "youtube": ["youtube", "youtube_url"],
 }
 NICHE_CONFIGS = {
+    "auto_dealer": {
+        "keywords": ["bilforhandler", "brugte biler", "nye biler", "vaerksted", "leasing"],
+        "expected_socials": ["facebook", "instagram"],
+        "needs_booking": False,
+        "needs_menu": False,
+        "maps_weight": 1.1,
+    },
+    "real_estate": {
+        "keywords": ["ejendomsmaegler", "boliger", "villa", "lejlighed", "salgsvurdering"],
+        "expected_socials": ["facebook", "instagram", "linkedin"],
+        "needs_booking": False,
+        "needs_menu": False,
+        "maps_weight": 0.8,
+    },
+    "lawyer": {
+        "keywords": ["advokat", "juridisk", "raadgivning", "kontakt"],
+        "expected_socials": ["linkedin", "facebook"],
+        "needs_booking": False,
+        "needs_menu": False,
+        "maps_weight": 0.8,
+    },
+    "accountant": {
+        "keywords": ["revisor", "bogholderi", "regnskab", "raadgivning"],
+        "expected_socials": ["linkedin", "facebook"],
+        "needs_booking": False,
+        "needs_menu": False,
+        "maps_weight": 0.8,
+    },
+    "dentist": {
+        "keywords": ["tandlaege", "implantat", "behandling", "book tid"],
+        "expected_socials": ["facebook"],
+        "needs_booking": True,
+        "needs_menu": False,
+        "maps_weight": 1.0,
+    },
+    "cafe": {
+        "keywords": ["cafe", "kaffe", "brunch", "menu", "booking"],
+        "expected_socials": ["instagram", "facebook"],
+        "needs_booking": False,
+        "needs_menu": True,
+        "maps_weight": 1.2,
+    },
+    "retail": {
+        "keywords": ["butik", "shop", "produkter", "aabningstider"],
+        "expected_socials": ["instagram", "facebook"],
+        "needs_booking": False,
+        "needs_menu": False,
+        "maps_weight": 1.0,
+    },
+    "photographer": {
+        "keywords": ["fotograf", "bryllup", "portraet", "galleri", "booking"],
+        "expected_socials": ["instagram", "facebook"],
+        "needs_booking": True,
+        "needs_menu": False,
+        "maps_weight": 1.1,
+    },
+    "plumber": {
+        "keywords": ["vvs", "blaikkenslager", "installation", "kontakt", "service"],
+        "expected_socials": ["facebook"],
+        "needs_booking": False,
+        "needs_menu": False,
+        "maps_weight": 0.9,
+    },
+    "electrician": {
+        "keywords": ["elektriker", "el-installation", "service", "kontakt"],
+        "expected_socials": ["facebook"],
+        "needs_booking": False,
+        "needs_menu": False,
+        "maps_weight": 0.9,
+    },
+    "carpenter": {
+        "keywords": ["toemrer", "renovering", "byggeri", "kontakt"],
+        "expected_socials": ["facebook", "instagram"],
+        "needs_booking": False,
+        "needs_menu": False,
+        "maps_weight": 0.9,
+    },
     "restaurant": {
         "keywords": ["restaurant", "menu", "booking", "take away", "mad", "drinks"],
         "expected_socials": ["facebook", "instagram"],
@@ -254,6 +332,16 @@ def find_businesses(session: requests.Session, city: str, query: str) -> list[st
 def build_discovery_phrases(city: str, query: str) -> list[str]:
     clean_city = clean_text(city)
     clean_query = clean_text(query)
+
+    if not clean_query or clean_query == ALL_BUSINESSES_QUERY:
+        broad_phrases = [
+            f"virksomheder i {clean_city}",
+            f"lokale virksomheder {clean_city}",
+            f"businesses in {clean_city}",
+            f"firmaer i {clean_city}",
+            f"site:.dk {clean_city}",
+        ]
+        return list(dict.fromkeys(phrase for phrase in broad_phrases if clean_text(phrase)))
 
     phrases = [
         f"{clean_query} {clean_city} website",
@@ -1116,6 +1204,62 @@ def run_scan_report(config: ScanConfig) -> ScanReport:
 
 def run_scan(config: ScanConfig) -> list[BusinessLead]:
     return run_scan_report(config).leads
+
+
+def preview_discovery(config: ScanConfig) -> list[ScanAttempt]:
+    session = build_session()
+    try:
+        sources = collect_sources(config, session)
+    except (FileNotFoundError, requests.RequestException) as exc:
+        print(str(exc))
+        return []
+
+    if not sources:
+        return []
+
+    attempts: list[ScanAttempt] = []
+    scanned = 0
+    for source in sources:
+        if scanned >= config.max_businesses:
+            break
+
+        input_name = get_csv_value(source.row, "name") or source.website or "ukendt"
+        search_city = get_csv_value(source.row, "city") or config.city
+        search_query = get_csv_value(source.row, "query") or config.query
+        resolved_website = discover_website_for_source(
+            session,
+            source,
+            fallback_city=config.city,
+            fallback_query=config.query,
+        )
+
+        if resolved_website:
+            scanned += 1
+            attempts.append(
+                ScanAttempt(
+                    source_type=source.source_type,
+                    input_name=input_name,
+                    search_city=search_city,
+                    search_query=search_query,
+                    discovered_website=resolved_website,
+                    discovery_status="fundet",
+                    detail="Klar til scoring",
+                )
+            )
+        else:
+            attempts.append(
+                ScanAttempt(
+                    source_type=source.source_type,
+                    input_name=input_name,
+                    search_city=search_city,
+                    search_query=search_query,
+                    discovered_website=None,
+                    discovery_status="ikke-fundet",
+                    detail="Ingen brugbar hjemmeside fundet endnu",
+                )
+            )
+
+    return attempts
 
 
 def persist_outputs(leads: list[BusinessLead], config: ScanConfig) -> None:

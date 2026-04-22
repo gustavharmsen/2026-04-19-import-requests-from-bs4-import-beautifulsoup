@@ -210,7 +210,9 @@
             </label>
             <p class="hint">CSV kan indeholde fleksible kolonner som `name`, `website`, `rating`, `review_count`, `image_count`, `maps_url`, `instagram`, `facebook` og lignende.</p>
             <div class="submit-row">
-              <button type="submit">Kør Lead Scan og find virksomheder</button>
+              <button type="submit" name="action" value="scan">Kør Lead Scan og find virksomheder</button>
+              <button type="submit" name="action" value="discover" style="background: linear-gradient(135deg, #18211f 0%, #33433f 100%);">Find kandidater først</button>
+              <button type="submit" name="action" value="all-businesses" style="background: linear-gradient(135deg, #7a5412 0%, #b77922 100%);">Find alle virksomheder i byen</button>
               <div class="hint">Hvis der ikke kommer resultater, er det typisk fordi offentlige søgesider ikke returnerer brugbare websites for den søgning endnu.</div>
             </div>
           </form>

@@ -134,9 +134,18 @@
         background: var(--soft);
         font-size: 0.85rem;
       }
-      .tier-A { background: #dff3e7; }
-      .tier-B { background: #f6e7c9; }
-      .tier-C { background: #eee4da; }
+      .tier-A {
+        background: #dff3e7;
+        color: #0d5130;
+      }
+      .tier-B {
+        background: #f6e7c9;
+        color: #7a5412;
+      }
+      .tier-C {
+        background: #f8d9d2;
+        color: #8c2f22;
+      }
       .shortlist-btn, .details-btn {
         border: 1px solid var(--line);
         background: #fff;
@@ -144,6 +153,21 @@
         padding: 8px 12px;
         cursor: pointer;
         font: inherit;
+      }
+      .open-link-btn, .copy-link-btn {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 999px;
+        padding: 8px 12px;
+        cursor: pointer;
+        font: inherit;
+        margin-top: 8px;
+        margin-right: 8px;
+      }
+      .open-link-btn {
+        background: #18211f;
+        color: #fff;
+        border-color: #18211f;
       }
       .shortlist-btn.active {
         background: #18211f;
@@ -159,6 +183,9 @@
       }
       .lead-card.active {
         display: block;
+      }
+      .lead-card.flash {
+        animation: focusflash 1.1s ease;
       }
       .lead-card pre {
         white-space: pre-wrap;
@@ -208,6 +235,11 @@
       .hidden {
         display: none !important;
       }
+      @keyframes focusflash {
+        0% { box-shadow: 0 0 0 0 rgba(12, 124, 89, 0.0); }
+        35% { box-shadow: 0 0 0 10px rgba(12, 124, 89, 0.18); }
+        100% { box-shadow: 0 12px 30px rgba(36, 31, 20, 0.07); }
+      }
       @media (max-width: 980px) {
         .grid, .control-row, .stats {
           grid-template-columns: 1fr;
@@ -247,6 +279,10 @@
         <div class="stat">
           <span class="meta">A-leads</span>
           <strong id="stat-a">{{ leads | selectattr('lead_tier', 'equalto', 'A') | list | length }}</strong>
+        </div>
+        <div class="stat">
+          <span class="meta">B-leads</span>
+          <strong id="stat-b">{{ leads | selectattr('lead_tier', 'equalto', 'B') | list | length }}</strong>
         </div>
         <div class="stat">
           <span class="meta">Snit-score</span>
@@ -360,10 +396,12 @@
                 data-maps-images="{{ lead.maps_image_count if lead.maps_image_count is not none else 9999 }}"
               >
                 <td>
-                  <strong>{{ lead.business_name }}</strong><br>
-                  <span class="meta">{{ lead.website }}</span>
-                </td>
-                <td><span class="pill tier-{{ lead.lead_tier }}">Tier {{ lead.lead_tier }}</span></td>
+                <strong>{{ lead.business_name }}</strong><br>
+                <span class="meta">{{ lead.website }}</span><br>
+                <button class="open-link-btn" type="button" data-url="{{ lead.website }}">Aabn hjemmeside</button>
+                <button class="copy-link-btn" type="button" data-url="{{ lead.website }}">Kopier link</button>
+              </td>
+              <td><span class="pill tier-{{ lead.lead_tier }}">Tier {{ lead.lead_tier }}</span></td>
                 <td>{{ lead.lead_score }}/100</td>
                 <td>{{ lead.maps_image_count if lead.maps_image_count is not none else '-' }}</td>
                 <td>
@@ -462,7 +500,13 @@
       function showCard(index) {
         cards.forEach(card => card.classList.remove('active'));
         const target = document.getElementById(`lead-card-${index}`);
-        if (target) target.classList.add('active');
+        if (target) {
+          target.classList.add('active');
+          target.classList.remove('flash');
+          void target.offsetWidth;
+          target.classList.add('flash');
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
       }
 
       function matchesFilters(row) {
@@ -513,6 +557,32 @@
 
       document.querySelectorAll('.details-btn').forEach(button => {
         button.addEventListener('click', () => showCard(button.dataset.index));
+      });
+
+      document.querySelectorAll('.open-link-btn').forEach(button => {
+        button.addEventListener('click', () => {
+          const url = button.dataset.url;
+          window.location.href = url;
+        });
+      });
+
+      document.querySelectorAll('.copy-link-btn').forEach(button => {
+        button.addEventListener('click', async () => {
+          const url = button.dataset.url;
+          try {
+            await navigator.clipboard.writeText(url);
+            button.textContent = 'Link kopieret';
+            setTimeout(() => {
+              button.textContent = 'Kopier link';
+            }, 1400);
+          } catch (error) {
+            window.prompt('Kopier dette link:', url);
+          }
+        });
+      });
+
+      document.querySelectorAll('.lead-row').forEach(row => {
+        row.addEventListener('dblclick', () => showCard(row.dataset.index));
       });
 
       document.querySelectorAll('.shortlist-btn').forEach(button => {
