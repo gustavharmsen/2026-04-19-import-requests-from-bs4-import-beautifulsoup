@@ -31,7 +31,7 @@ def index():
     if request.method == "POST":
         config = ScanConfig(
             city=request.form.get("city", DEFAULT_CITY),
-            query=request.form.get("query", DEFAULT_QUERY),
+            query=request.form.get("query", DEFAULT_QUERY).strip(),
             niche=request.form.get("niche", DEFAULT_NICHE),
             max_businesses=int(request.form.get("max_businesses", DEFAULT_MAX_BUSINESSES)),
             max_images=int(request.form.get("max_images", DEFAULT_MAX_IMAGES)),
@@ -99,7 +99,7 @@ def index():
 def score_candidates():
     config = ScanConfig(
         city=request.form.get("city", DEFAULT_CITY),
-        query=request.form.get("query", DEFAULT_QUERY),
+        query=request.form.get("query", DEFAULT_QUERY).strip(),
         niche=request.form.get("niche", DEFAULT_NICHE),
         max_businesses=int(request.form.get("max_businesses", DEFAULT_MAX_BUSINESSES)),
         max_images=int(request.form.get("max_images", DEFAULT_MAX_IMAGES)),

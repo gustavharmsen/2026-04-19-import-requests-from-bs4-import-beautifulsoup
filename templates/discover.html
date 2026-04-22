@@ -97,7 +97,7 @@
 
       <section class="panel">
         <h1>Kandidater fundet via discovery</h1>
-        <p class="meta">Her kan du se hvad systemet faktisk fandt for søgningen <strong>{{ config.query }}</strong> i <strong>{{ config.city }}</strong>, før scoring køres.</p>
+        <p class="meta">Her kan du se hvad systemet faktisk fandt for {% if config.query %}søgningen <strong>{{ config.query }}</strong>{% else %}nichen <strong>{{ config.niche }}</strong>{% endif %} i <strong>{{ config.city }}</strong>, før scoring køres.</p>
         <table>
           <thead>
             <tr>

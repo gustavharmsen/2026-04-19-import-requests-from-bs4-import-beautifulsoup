@@ -151,14 +151,15 @@
       <section class="hero">
         <div>
           <h1>Lead Engine v2</h1>
-          <p class="lead">Scan websites, Maps-data og sociale profiler i samme flow. Brug CSV, manuelle websites eller søgning, og få en prioriteret leadliste med outreach-vinkler og lokal database.</p>
+          <p class="lead">Find virksomheder med svag visuel profil, faa billeder eller lav billedkvalitet, og brug dem som varme leads for foto-, video- og visuelle salgsydelser. Du kan bruge niche alene eller kombinere med et frivilligt søgeord.</p>
         </div>
         <div class="quickstart">
-          <strong>Hvis du bare vil finde leads fra en kategori:</strong>
+          <strong>Hvis du bare vil finde leads fra en niche:</strong>
           <div class="steps">
             <div>1. Skriv en by, fx <em>Esbjerg</em>.</div>
-            <div>2. Skriv en kategori, fx <em>bilforhandler</em>.</div>
-            <div>3. Klik <em>Kør Lead Scan</em> nederst i formularen.</div>
+            <div>2. Vaelg en niche, fx <em>restaurant</em> eller <em>bilforhandler</em>.</div>
+            <div>3. Lad <em>Søgning</em> sta tom eller skriv et ekstra ord, hvis du vil indsnævre.</div>
+            <div>4. Klik <em>Kør Lead Scan</em> nederst i formularen.</div>
           </div>
         </div>
       </section>
@@ -167,15 +168,15 @@
         <section class="panel">
           <form method="post" enctype="multipart/form-data">
             <div class="mode-note">
-              <strong>Standardtilstand</strong>
-              Du behøver ikke kende virksomhedsnavne eller websites. Felterne <em>By</em> og <em>Søgning</em> er nok for at starte en discovery-søgning.
+              <strong>Fotograf-salgstilstand</strong>
+              Du behøver ikke kende virksomhedsnavne eller websites. Du kan bare vaelge en <em>Niche</em> og en <em>By</em>. Feltet <em>Søgning</em> er nu valgfrit og bruges kun, hvis du vil styre discovery endnu mere.
             </div>
             <div class="two">
               <label>By
                 <input name="city" value="{{ defaults.city }}">
               </label>
               <label>Søgning
-                <input name="query" value="{{ defaults.query }}">
+                <input name="query" value="{{ defaults.query }}" placeholder="Valgfrit: fx brunch, bryllup eller leasing">
               </label>
             </div>
             <div class="two">
@@ -201,7 +202,7 @@
             <label>Min. score
               <input type="number" name="min_score" value="{{ defaults.min_score }}">
             </label>
-            <p class="hint">Hvis du bare vil se alt der bliver fundet, saet `Min. score` til `0` eller `25`.</p>
+            <p class="hint">Hvis du bare vil se alt der bliver fundet, saet `Min. score` til `0` eller `25`. Du kan lade <em>Søgning</em> vaere tom og kun vaelge niche.</p>
             <label>Manuelle websites
               <textarea name="websites" placeholder="https://example.com, https://example.org&#10;eller ét website per linje"></textarea>
             </label>
@@ -210,22 +211,22 @@
             </label>
             <p class="hint">CSV kan indeholde fleksible kolonner som `name`, `website`, `rating`, `review_count`, `image_count`, `maps_url`, `instagram`, `facebook` og lignende.</p>
             <div class="submit-row">
-              <button type="submit" name="action" value="scan">Kør Lead Scan og find virksomheder</button>
+              <button type="submit" name="action" value="scan">Kør Lead Scan fra niche eller søgning</button>
               <button type="submit" name="action" value="discover" style="background: linear-gradient(135deg, #18211f 0%, #33433f 100%);">Find kandidater først</button>
               <button type="submit" name="action" value="all-businesses" style="background: linear-gradient(135deg, #7a5412 0%, #b77922 100%);">Find alle virksomheder i byen</button>
-              <div class="hint">Hvis der ikke kommer resultater, er det typisk fordi offentlige søgesider ikke returnerer brugbare websites for den søgning endnu.</div>
+              <div class="hint">Hvis der ikke kommer resultater, saa prøv kun by + niche først. Derefter kan du tilføje et ekstra søgeord for at indsnævre.</div>
             </div>
           </form>
         </section>
 
         <aside class="panel stats">
           <div class="stat">
-            <strong>4 spor i samme motor</strong>
-            <div class="hint">Søgning, CSV-import, Maps-signaler og social presence.</div>
+            <strong>Foto-fokuseret leadfinding</strong>
+            <div class="hint">Finder virksomheder med svag visuel præsentation, tynde billedflader og plads til bedre content.</div>
           </div>
           <div class="stat">
             <strong>Niche-scoring</strong>
-            <div class="hint">Restaurant, salon, clinic, gym, hotel og default.</div>
+            <div class="hint">Restaurant, hotel, salon, cafe, retail, ejendom, auto og flere andre visuelle brancher.</div>
           </div>
           <div class="stat">
             <strong>CRM-klar output</strong>

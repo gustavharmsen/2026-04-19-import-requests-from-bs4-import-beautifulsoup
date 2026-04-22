@@ -24,9 +24,9 @@ USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 DEFAULT_TIMEOUT = 10
-DEFAULT_SERVICE = "hjemmeside, billeder og lokal SEO"
+DEFAULT_SERVICE = "erhvervsfoto, virksomhedsprofil billeder og visuel opgradering"
 DEFAULT_CITY = "Esbjerg"
-DEFAULT_QUERY = "restaurant"
+DEFAULT_QUERY = ""
 DEFAULT_NICHE = "restaurant"
 ALL_BUSINESSES_QUERY = "__all_businesses__"
 DEFAULT_OUTPUT_CSV = "lead_results.csv"
@@ -312,9 +312,9 @@ def get_niche_config(niche: str) -> dict[str, Any]:
     return NICHE_CONFIGS.get(niche.lower(), NICHE_CONFIGS["default"])
 
 
-def find_businesses(session: requests.Session, city: str, query: str) -> list[str]:
+def find_businesses(session: requests.Session, city: str, query: str, niche: str = "default") -> list[str]:
     results: list[str] = []
-    for phrase in build_discovery_phrases(city=city, query=query):
+    for phrase in build_discovery_phrases(city=city, query=query, niche=niche):
         for search_fn in (search_google_phrase, search_bing_phrase, search_duckduckgo_phrase):
             try:
                 found = search_fn(session, phrase)
@@ -329,11 +329,29 @@ def find_businesses(session: requests.Session, city: str, query: str) -> list[st
     return list(dict.fromkeys(results))
 
 
-def build_discovery_phrases(city: str, query: str) -> list[str]:
+def build_keyword_seed(query: str, niche: str) -> list[str]:
+    clean_query = clean_text(query)
+    niche_config = get_niche_config(niche)
+    niche_keywords = [clean_text(keyword) for keyword in niche_config.get("keywords", []) if clean_text(keyword)]
+
+    if clean_query and clean_query != ALL_BUSINESSES_QUERY:
+        seeds = [clean_query]
+        if clean_query.lower() not in {keyword.lower() for keyword in niche_keywords}:
+            seeds.extend(niche_keywords[:2])
+        return list(dict.fromkeys(seed for seed in seeds if seed))
+
+    if niche != "default" and niche_keywords:
+        return list(dict.fromkeys(niche_keywords))
+
+    return []
+
+
+def build_discovery_phrases(city: str, query: str, niche: str) -> list[str]:
     clean_city = clean_text(city)
     clean_query = clean_text(query)
+    keyword_seeds = build_keyword_seed(query=clean_query, niche=niche)
 
-    if not clean_query or clean_query == ALL_BUSINESSES_QUERY:
+    if clean_query == ALL_BUSINESSES_QUERY:
         broad_phrases = [
             f"virksomheder i {clean_city}",
             f"lokale virksomheder {clean_city}",
@@ -343,25 +361,40 @@ def build_discovery_phrases(city: str, query: str) -> list[str]:
         ]
         return list(dict.fromkeys(phrase for phrase in broad_phrases if clean_text(phrase)))
 
-    phrases = [
-        f"{clean_query} {clean_city} website",
-        f"{clean_query} {clean_city}",
-        f"{clean_query} i {clean_city}",
-        f"bedste {clean_query} {clean_city}",
-        f"{clean_query} {clean_city} kontakt",
-        f"{clean_query} {clean_city} booking",
-    ]
+    if not keyword_seeds:
+        broad_phrases = [
+            f"virksomheder i {clean_city}",
+            f"lokale virksomheder {clean_city}",
+            f"bedrifter i {clean_city}",
+            f"site:.dk {clean_city}",
+        ]
+        return list(dict.fromkeys(phrase for phrase in broad_phrases if clean_text(phrase)))
 
-    if clean_city:
-        phrases.append(f"{clean_query} naer {clean_city}")
-    else:
+    phrases: list[str] = []
+    for seed in keyword_seeds:
         phrases.extend(
             [
-                f"{clean_query} website",
-                f"bedste {clean_query}",
-                f"{clean_query} kontakt",
+                f"{seed} {clean_city} website",
+                f"{seed} {clean_city}",
+                f"{seed} i {clean_city}",
+                f"bedste {seed} {clean_city}",
+                f"{seed} {clean_city} kontakt",
+                f"{seed} {clean_city} booking",
             ]
         )
+
+    if clean_city:
+        for seed in keyword_seeds:
+            phrases.extend(
+                [
+                    f"{seed} naer {clean_city}",
+                    f"{clean_city} {seed}",
+                    f"{clean_city} {seed} hjemmeside",
+                ]
+            )
+    else:
+        for seed in keyword_seeds:
+            phrases.extend([f"{seed} website", f"bedste {seed}", f"{seed} kontakt"])
 
     return list(dict.fromkeys(phrase for phrase in phrases if clean_text(phrase)))
 
@@ -815,6 +848,7 @@ def score_business(
     config = get_niche_config(niche)
     reasons: list[str] = []
     score = 50
+    visual_offer = is_visual_service_offer(service_offer)
 
     if image_count <= 3:
         score += 14
@@ -908,6 +942,16 @@ def score_business(
             reasons=reasons,
         )
 
+    if visual_offer:
+        score += score_visual_sales_fit(
+            niche=niche,
+            image_count=image_count,
+            analyses=analyses,
+            maps_image_count=maps_image_count,
+            social_links=profile.social_links,
+            reasons=reasons,
+        )
+
     lead_score = max(0, min(100, round(score)))
     lead_tier = classify_lead_tier(lead_score)
     recommendation = build_recommendation(lead_tier)
@@ -965,6 +1009,44 @@ def score_social_presence(social_links: dict[str, str], niche: str) -> int:
     elif present_count == 0:
         score_delta += 6
     return score_delta
+
+
+def is_visual_service_offer(service_offer: str) -> bool:
+    lowered = clean_text(service_offer).lower()
+    return any(keyword in lowered for keyword in ("foto", "billede", "visuel", "video", "content"))
+
+
+def score_visual_sales_fit(
+    niche: str,
+    image_count: int,
+    analyses: list[ImageAnalysis],
+    maps_image_count: int | None,
+    social_links: dict[str, str],
+    reasons: list[str],
+) -> int:
+    score = 0
+    visual_niches = {"restaurant", "salon", "cafe", "hotel", "retail", "real_estate", "auto_dealer", "gym"}
+
+    if niche in visual_niches:
+        score += 6
+        reasons.append("visuelt tung branche med foto-potentiale")
+
+    if image_count <= 3:
+        score += 8
+        reasons.append("svag billedflade pa hjemmesiden")
+    elif not analyses:
+        score += 6
+        reasons.append("ingen analyserbare billeder trods visuelt salgsbehov")
+
+    if maps_image_count is not None and maps_image_count <= 3:
+        score += 6
+        reasons.append("tynd billeddaekning pa maps")
+
+    if "instagram" not in social_links and niche in visual_niches:
+        score += 5
+        reasons.append("svag visuel tilstedevaerelse pa sociale medier")
+
+    return score
 
 
 def score_maps_signals(
@@ -1098,7 +1180,16 @@ def collect_sources(config: ScanConfig, session: requests.Session) -> list[LeadS
     if config.input_websites:
         return [LeadSource(website=url, source_type="manual") for url in load_websites_from_file(config.input_websites)]
 
-    found = find_businesses(session, city=config.city, query=config.query)
+    found = []
+    for phrase in build_discovery_phrases(city=config.city, query=config.query, niche=config.niche):
+        for search_fn in (search_google_phrase, search_bing_phrase, search_duckduckgo_phrase):
+            try:
+                found.extend(search_fn(session, phrase))
+            except requests.RequestException:
+                continue
+        found = list(dict.fromkeys(found))
+        if len(found) >= config.max_businesses:
+            break
     return [LeadSource(website=url, source_type="search") for url in found]
 
 

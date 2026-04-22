@@ -257,7 +257,7 @@
 
       <section class="hero">
         <h1>{{ leads|length }} leads fundet</h1>
-        <p class="meta">Niche: {{ config.niche }}. By: {{ config.city }}. Søgning: {{ config.query }}. Brug tabellen til at filtrere, sortere og shortlist de bedste leads.</p>
+        <p class="meta">Niche: {{ config.niche }}. By: {{ config.city }}. {% if config.query %}Søgning: {{ config.query }}.{% else %}Søgning: niche-styret discovery.{% endif %} Brug tabellen til at filtrere, sortere og shortlist de bedste leads.</p>
       </section>
 
       {% if not leads %}
